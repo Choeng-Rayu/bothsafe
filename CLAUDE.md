@@ -77,6 +77,8 @@ npx prisma db seed         # seed data (once seed exists)
 
 The current `.env` points at PostgreSQL (`postgresql://bothsafe:bothsafe@localhost:5432/bothsafe`) — design.md is the source of truth on DB choice. The default `PORT` in `.env` is 3003 but `AGENTS.md` documents 3001; check before assuming.
 
+Binance Pay env vars (required when the buyer/seller Binance Pay flows are enabled — see `.env.example`): `BINANCE_PAY_BASE_URL`, `BINANCE_PAY_API_KEY`, `BINANCE_PAY_API_SECRET`, `BINANCE_PAY_WEBHOOK_BUYER_URL`, `BINANCE_PAY_WEBHOOK_PAYOUT_URL`, optional `BINANCE_PAY_SANDBOX` (defaults `true`). Until the merchant account is approved, point `BASE_URL` at Binance's sandbox host and use development credentials.
+
 ### Frontend (`/frontend`)
 
 `package.json` does **not exist yet** — the frontend is bootstrapped from `create-next-app` but the manifest hasn't been committed. When adding it, the standard scripts (`dev`, `build`, `start`, `lint`) align with `next.config.ts` + `eslint.config.mjs`. Frontend dev server runs on `:3000`. Copy `frontend/.env.example` to `frontend/.env.local`; `NEXT_PUBLIC_API_BASE` should point at `http://localhost:3003` to match the backend.
@@ -84,6 +86,8 @@ The current `.env` points at PostgreSQL (`postgresql://bothsafe:bothsafe@localho
 ### Auto-format hooks
 
 `.claude/settings.json` has `PostToolUse` hooks that run prettier + eslint + tsc on backend `.ts` edits, and prettier + eslint + tsc on frontend `.ts/.tsx/.js/.jsx/.css` edits. The frontend hook is a no-op until `frontend/package.json` exists. tsc failures block the edit (exit 2); prettier/eslint warnings don't.
+
+The backend hook matches any `.ts`/`.tsx` under `/backend/`, so the new module paths added for the Binance Pay integration — `backend/src/binance-pay/`, `backend/src/payment/binance/`, `backend/src/withdrawal/binance/` — are already covered. **Do not modify `.claude/settings.json`** to special-case them; the existing matcher is sufficient. If you ever need to skip formatting for a specific file (e.g. a generated fixture), use a `// prettier-ignore` comment rather than weakening the hook.
 
 ## Architecture you must internalize
 
@@ -111,8 +115,27 @@ Hard rules (from `AGENTS.md` + `design.md`):
 - All routes prefixed with `/v1` (URI versioning is enabled in `main.ts`).
 - Every deal response must include `missing_fields` (array) and `allowed_actions` (array) so the frontend renders permissions instead of hardcoding them.
 - All user-facing strings return a `message_key`, not literal text. i18n keys live in the frontend; the supported locales are `km`, `en`, `zh`.
-- Public endpoints are rate-limited via `@nestjs/throttler` (default 10 req/min per IP, configured globally in `app.module.ts`).
+- Public endpoints are rate-limited via `@nestjs/throttler` (default 10 req/min per IP, configured globally in `app.module.ts`). The two Binance Pay webhooks (`/v1/payment/binance/webhook`, `/v1/withdrawal/binance/webhook`) are exempt from the global throttler — Binance has its own retry policy and authenticates via `BinancePay-*` signature headers.
 - CORS allows configured origins from `CORS_ORIGINS` (comma-separated), or all origins when empty in development only.
+
+### Payment integrations
+
+Three buyer payment paths live under `backend/src/payment/`. They all converge on the canonical state machine; never short-circuit it.
+
+| Path | Status moves | Settlement trigger |
+|---|---|---|
+| Wallet | `READY_FOR_PAYMENT → PAID_ESCROWED → SELLER_PREPARING` (single tx, R9) | Synchronous in `WalletService.payDealFromWallet` |
+| KHQR | `READY_FOR_PAYMENT → PAYMENT_PENDING_VERIFICATION → PAID_ESCROWED → SELLER_PREPARING` (R10, R11) | `KhqrVerifier` polls Bakong; admin fallback if no auto-match in 60s |
+| Binance Pay | `READY_FOR_PAYMENT → PAYMENT_PENDING_VERIFICATION → PAID_ESCROWED → SELLER_PREPARING` (R21) | Webhook (`PAY_SUCCESS`) **or** reconciliation poll every 60s |
+
+Two seller withdrawal destinations: `khqr` (admin pays out manually with admin-supplied `payout_reference`), `bank` (same), and `binance` (admin click triggers `BinancePayoutService.initiatePayout` which calls Binance's payout API; status is updated by `/v1/withdrawal/binance/webhook` plus a 60s reconciliation poll).
+
+Hard rules layered on top of the existing seven:
+
+8. **Binance Pay webhook signatures must be verified twice** — HMAC-SHA512 over `${timestamp}\n${nonce}\n${rawBody}\n` AND RSA-SHA256 over the body using the cached public certificate from `BinancePay-Certificate-SN`. Reject on either mismatch or ±5min timestamp skew.
+9. **Webhook handlers are idempotent** keyed on `(prepay_id, event_type, BinancePay-Nonce)`. Duplicates respond `200 { code: 'SUCCESS' }` and write nothing.
+10. **`BINANCE_PAY_API_SECRET` is read once at boot** into a non-enumerable property of `BinancePayClient`. Never log it, never include in error envelopes/audit rows/notification payloads. The Pino redaction list must include `BINANCE_PAY_API_SECRET` and `BinancePay-Signature`.
+11. **No status transitions inside Binance modules.** `payment/binance/` and `withdrawal/binance/` call `WalletService` and `WithdrawalService` exactly the same way the KHQR path does. Rule #2 still applies.
 
 ### Module map (where each concern lives)
 
@@ -135,6 +158,9 @@ The backend modules below don't exist yet — when creating them, place them at 
 | `backend/src/notification/` | Outbox-driven dispatch (in-app timeline + Telegram + admin queue). Notification failure must NOT roll back the originating business state. |
 | `backend/src/audit/` | Append-only `AuditLogEntry` writer, called inside the originating action's transaction |
 | `backend/src/storage/` | MinIO uploads (payment proofs, product images, shipping proofs, dispute evidence), signed URLs |
+| `backend/src/binance-pay/` | Shared low-level Binance Pay merchant client: HMAC-SHA512 signing, certificate cache, signature verifier. No domain knowledge. |
+| `backend/src/payment/binance/` | Buyer-side Binance Pay: create-order, public webhook handler at `/v1/payment/binance/webhook`, reconciliation processor. Calls `WalletService.settleEscrowFromBinance`. |
+| `backend/src/withdrawal/binance/` | Seller-side Binance Pay payout: invoked from `WithdrawalService.approve` when destination=binance, payout-callback webhook at `/v1/withdrawal/binance/webhook`, reconciliation processor. |
 | `backend/src/bot/` | Telegram bot module — runs **in-process inside NestJS**, calls `DealService` directly (not HTTP). Same business rules; no bot-only logic. |
 | `backend/src/prisma/` | Shared `PrismaService` |
 
@@ -154,7 +180,7 @@ The bot is a NestJS module, not a separate service. In MVP it can: `/start`, `/n
 
 ## MVP exclusions (do not build yet)
 
-Telegram Mini App, merchant API/SDK, iframe widget, delivery integration, KYC, AI fraud detection, ratings, subscription/digital escrow, Binance / international payments. The full list is in `AGENTS.md`.
+Telegram Mini App, merchant API/SDK, iframe widget, delivery integration, KYC, AI fraud detection, ratings, subscription/digital escrow, international fiat rails (Visa/Mastercard direct, SWIFT). The full list is in `AGENTS.md`. **Binance Pay is now in scope** — it's added as a second buyer payment option (R21) and a third seller withdrawal destination (R22) per `.kiro/specs/bothsafe-deal-flow/{requirements,design,tasks}.md`. Treat the older "Binance / international payments" line in `AGENTS.md` as superseded by `design.md` for the deal-flow feature.
 
 ## Notes specific to this repo
 

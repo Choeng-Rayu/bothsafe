@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "name": "Sync DB & Infra Context",
+  "description": "Watches infra files (docker-compose dev/prod, backend env templates, Prisma schema/migrations). On change, re-syncs the AI's understanding of dev vs prod database, cache, and storage by reconciling the change against `.kiro/steering/database.md` and flagging drift.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "docker-compose.yml",
+      "docker-compose.prod.yml",
+      "backend/.env.example",
+      "backend/.env",
+      "backend/prisma/schema.prisma",
+      "backend/prisma/migrations/**/*.sql",
+      "AGENTS.md"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "An infrastructure or database-related file just changed. Re-sync your mental model of BothSafe's dev vs prod data services and update the steering file if needed.\n\nSteps:\n1. Read the changed file plus the others in this set so you compare them as a whole:\n   - `docker-compose.yml` (dev data services)\n   - `docker-compose.prod.yml` (prod full stack)\n   - `backend/.env.example` and `backend/.env` (don't echo secret values back)\n   - `backend/prisma/schema.prisma` (datasource provider, models)\n   - `backend/prisma/migrations/**` (latest migration intent)\n   - `AGENTS.md` (high-level project doc)\n   - `.kiro/steering/database.md` (current source of truth for infra context)\n\n2. For each environment (development, production) confirm:\n   - Database engine + version, hostname, port, db name, user (note password only as \"set via env\").\n   - Cache engine + version, host, port.\n   - Object storage engine, endpoint, port, bucket, SSL flag.\n   - Whether services are exposed to the host or only on the internal docker network.\n   - Volumes that hold persistent data and which commands wipe them.\n   - Migration policy (`prisma migrate dev` vs `prisma migrate deploy`).\n\n3. Detect drift:\n   - Between the changed file and `.kiro/steering/database.md`.\n   - Between `AGENTS.md` and the actual infra (e.g. AGENTS.md says MySQL but compose uses Postgres).\n   - Between `schema.prisma` `datasource db.provider` and the compose engine.\n   - Between dev and prod (different engines, versions, bucket names, etc.).\n\n4. If `.kiro/steering/database.md` is out of date, update it in place so it stays the single source of truth. Keep the `inclusion: always` front matter, the TL;DR table, the Development / Production sections, and the \"Rules for the agent\" list. Do not invent infra that isn't in the files. Do not paste real secret values; refer to env var names.\n\n5. If `AGENTS.md` disagrees with reality, leave `AGENTS.md` alone but call it out in your summary so the user can decide whether to update the doc.\n\n6. If a destructive change is implied (engine swap, volume rename, removed service, dropped migration), flag it clearly and do NOT run any compose or prisma commands. Just report.\n\n7. Output a short summary: what changed, what you updated in `database.md`, and any drift the user should resolve.\n\nNever run `docker compose down -v`, `prisma migrate reset`, `db push --force-reset`, or any other destructive command as part of this hook."
+  }
+}

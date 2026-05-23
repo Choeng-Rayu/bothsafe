@@ -22,6 +22,7 @@ The design preserves the canonical Deal Status state machine and module map esta
 | Object storage | **MinIO** (self-hosted) | Replaces external S3. Same Docker stack. |
 | Cache / sessions | **Redis 7** | Used for rate-limit counters, idempotency keys, and the notification outbox claim lock. Optional in dev — backend falls back to in-memory state if `REDIS_URL` is unset. |
 | Reverse proxy | **Nginx** | Production only. Single container, terminates TLS, fronts frontend + backend + MinIO. |
+| Crypto/USD checkout | **Binance Pay merchant API** | Optional second buyer payment method (R21) and optional seller withdrawal destination (R22). HMAC-SHA512 request signing; webhook callbacks verified via cached Binance public certificate. |
 | Deployment (dev) | `docker-compose.yml` at repo root | Data services only: `bothsafe-dev-postgres` (host `:55432`), `bothsafe-dev-minio` (`:59000`/`:59001`), `bothsafe-dev-redis` (`:56379`). Backend (`npm run start:dev`, host `:3003`) and frontend (`npm run dev`, host `:3000`) run on the host for fast iteration. Ports are shifted to coexist with other services on a developer's machine. |
 | Deployment (prod) | `docker-compose.prod.yml` on a single VPS | Six services: `nginx`, `frontend`, `backend`, `bothsafe-postgres`, `bothsafe-minio`, `bothsafe-redis`. Only Nginx exposes 80/443. Backend and frontend ship as multi-stage Docker images (`backend/Dockerfile`, `frontend/Dockerfile`). |
 
@@ -96,6 +97,9 @@ New or significantly expanded modules introduced by this spec:
 | **Withdrawal** | `src/withdrawal/` | Seller `WithdrawalRequest`, available-balance calculation, hold creation, admin approve/reject. |
 | **Notification** | `src/notification/` | Outbox-driven event dispatch. In-app timeline + Telegram adapter + admin-queue adapter. |
 | **Audit** | `src/audit/` | Append-only `AuditLogEntry` writer. Used inside the same DB transaction as the originating action. |
+| **Binance Pay (shared)** | `src/binance-pay/` | Low-level merchant client. HMAC-SHA512 request signing, RSA certificate cache for inbound webhook signature verification, typed DTOs, retry/timeout policy. No domain knowledge. |
+| **Binance Pay buyer payment** | `src/payment/binance/` | Buyer-side: create-order, public webhook handler, reconciliation processor. Imports `binance-pay/` and `wallet/`. Never mutates `Deal_Status` directly — calls `WalletService.settleEscrowFromBinance(...)` which goes through `DealService.transition`. |
+| **Binance Pay seller payout** | `src/withdrawal/binance/` | Seller-side: payout API caller, payout-callback webhook handler, payout reconciliation processor. Imports `binance-pay/` and `wallet/`. Admin-gated through `WithdrawalService.approve`. |
 
 ### Deal Status state machine
 
@@ -116,6 +120,11 @@ stateDiagram-v2
   READY_FOR_PAYMENT --> PAYMENT_PENDING_VERIFICATION: KHQR receipt submitted (R10.4)
   PAYMENT_PENDING_VERIFICATION --> PAID_ESCROWED: KHQR auto-verify match (R11.2) or admin verify (R11.4)
   PAYMENT_PENDING_VERIFICATION --> READY_FOR_PAYMENT: admin reject (R11.5)
+
+  READY_FOR_PAYMENT --> PAYMENT_PENDING_VERIFICATION: Binance Pay order created (R21.4)
+  PAYMENT_PENDING_VERIFICATION --> PAID_ESCROWED: Binance Pay PAY_SUCCESS webhook or reconciliation (R21.8, R21.10)
+  PAYMENT_PENDING_VERIFICATION --> READY_FOR_PAYMENT: Binance Pay order EXPIRED/CANCELED via reconciliation (R21.10)
+  PAID_ESCROWED --> REFUNDED: Binance Pay PAY_REFUND webhook (R21.12)
 
   SELLER_PREPARING --> SHIPPED: seller submits shipping proof (R12.2)
   SHIPPED --> RELEASE_PENDING: buyer confirms received (R13.2)
@@ -228,6 +237,99 @@ sequenceDiagram
 ```
 
 
+### Sequence — Buyer Binance Pay payment + webhook + auto-release happy path
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Buyer
+  participant FE as Frontend (Next.js)
+  participant API as Backend (NestJS)
+  participant BP as BinancePayClient
+  participant BX as Binance Pay API
+  participant W as WalletService
+  participant N as NotificationOutbox
+
+  Buyer->>FE: open Deal Room, choose Binance Pay
+  FE->>API: POST /v1/deals/:publicId/payment/binance
+  API->>BP: createOrder(merchantTradeNo, amount, currency)
+  BP->>BX: POST /binancepay/openapi/v3/order (HMAC-SHA512 signed)
+  BX-->>BP: { prepayId, qrcodeLink, deeplink, universalUrl, expireTime }
+  Note over API,BP: single tx
+  API->>API: insert BinanceOrder(prepayId, status=PENDING) (R21.4)
+  API->>API: transition READY_FOR_PAYMENT → PAYMENT_PENDING_VERIFICATION
+  API-->>FE: { qrcodeLink, deeplink, expireTime } (R21.2 within 5s)
+  Buyer->>BX: pay via Binance app
+
+  BX->>API: POST /v1/payment/binance/webhook (signed, body=PAY_SUCCESS)
+  API->>BP: verifyWebhookSignature(headers, body) (R21.6)
+  Note over API: dedup by (prepayId, eventType, nonce) (R21.11)
+  Note over W: single tx — see "Atomic operations"
+  API->>W: settleEscrowFromBinance(deal, prepayId, tx)
+  W->>W: insert ledger ESCROW_RECEIVED (escrow wallet credit)
+  W->>W: status PAYMENT_PENDING_VERIFICATION → PAID_ESCROWED → SELLER_PREPARING (R21.8)
+  W->>W: BinanceOrder.status = PAID
+  W->>W: insert AuditLogEntry (R20.1)
+  W->>N: insert outbox row (PAYMENT_VERIFIED + SELLER_SHOULD_SHIP)
+  W-->>API: ok
+  API-->>BX: 200 OK { code: "SUCCESS" }
+
+  Note over API,BX: Reconciliation backstop (R21.10) every 60s
+  API->>BX: GET /binancepay/openapi/v3/order/query (for PENDING > 60s)
+  BX-->>API: status (PAID | EXPIRED | CANCELED | PENDING)
+  N->>N: drainer dispatches in-app + Telegram (R19.3 ≤5s)
+```
+
+### Sequence — Seller Binance Pay withdrawal: hold → admin payout → callback
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Seller
+  participant FE as Frontend
+  participant API as Backend
+  participant W as WalletService
+  participant BP as BinancePayClient
+  participant BX as Binance Pay API
+  participant N as NotificationOutbox
+  actor Admin
+  participant ADM as AdminPanel
+
+  Seller->>FE: submit withdrawal (amount, destination=binance, binance_pay_id)
+  FE->>API: POST /v1/withdrawals
+  API->>W: createWithdrawal(...)
+  Note over W: single tx (R22.4)
+  W->>W: assert available_balance >= amount (R15.6)
+  W->>W: insert WithdrawalRequest(destination=binance, status=pending_admin_review)
+  W->>W: insert WalletLedgerEntry SELLER_PAYOUT_PENDING (R15.8)
+  W-->>API: ok
+
+  Admin->>ADM: review queue
+  ADM->>API: POST /v1/admin/withdrawals/:id/approve
+  API->>BP: payout(merchantSendId=withdrawal.id, payeeId, amount, currency)
+  BP->>BX: POST /binancepay/openapi/payout/transfer (HMAC-SHA512 signed)
+  BX-->>BP: { payoutTransactionId, status: PROCESSING }
+  Note over W: single tx (R22.5)
+  API->>W: recordWithdrawalPayout(req, payoutTransactionId, tx)
+  W->>W: insert WalletLedgerEntry SELLER_PAYOUT_SENT
+  W->>W: WithdrawalRequest.status = paid, payout_reference = payoutTransactionId
+  W->>W: insert AuditLogEntry (R20.3)
+  W->>N: insert outbox row (seller notification)
+  W-->>API: ok
+
+  BX->>API: POST /v1/withdrawal/binance/webhook (signed, body=SUCCESS|FAILED)
+  API->>BP: verifyWebhookSignature(headers, body) (R22.7)
+  alt SUCCESS and already paid
+    API-->>BX: 200 OK { code: "SUCCESS" } (no-op)
+  else FAILED
+    Note over W: single tx — compensating ADJUSTMENT (R22.7)
+    W->>W: insert WalletLedgerEntry ADJUSTMENT credit (held amount)
+    W->>W: WithdrawalRequest.status = rejected, reason = binance_payout_failed
+    W->>N: insert outbox row (seller notification)
+  end
+```
+
+
 ---
 
 ## Components and Interfaces
@@ -291,6 +393,8 @@ class WalletService {
 
   payDealFromWallet(deal: DealRoom, buyer: User): Promise<DealRoomResponse>     // R9
   settleEscrowFromKhqr(deal: DealRoom, externalRef: string, tx: Tx): Promise<void> // R11.2, R11.4
+  settleEscrowFromBinance(deal: DealRoom, prepayId: string, tx: Tx): Promise<void> // R21.8
+  refundFromBinance(deal: DealRoom, prepayId: string, tx: Tx): Promise<void>       // R21.12
   autoReleaseToSeller(deal: DealRoom): Promise<DealRoomResponse>                // R13.3
 
   // Withdrawal hooks
@@ -319,14 +423,84 @@ class KhqrVerifier {
 
 `referenceNote` is generated as a 16-char base32 token (Crockford alphabet, no I/L/O/U) backed by a `UNIQUE` index on `deal_room.reference_note`. Two deals can never share a note.
 
+### BinancePayClient (`src/binance-pay/`)
+
+Low-level merchant client. No domain knowledge — operates on opaque request/response DTOs and the merchant credentials. Used by `BinanceOrderService` and `BinancePayoutService`.
+
+```ts
+class BinancePayClient {
+  // R21.2, R21.5 — order creation with HMAC-SHA512 signing and 3-retry policy
+  createOrder(req: CreateOrderRequest): Promise<CreateOrderResponse>
+  queryOrder(merchantTradeNo: string): Promise<QueryOrderResponse>     // R21.10
+
+  // R22.5, R22.6 — payout creation
+  payout(req: PayoutRequest): Promise<PayoutResponse>
+  queryPayout(payoutTransactionId: string): Promise<QueryPayoutResponse>  // R22.8
+}
+
+class BinancePaySignatureVerifier {
+  // R21.6 / R22.7 — verifies inbound webhook
+  // 1. HMAC-SHA512 over `${timestamp}\n${nonce}\n${body}\n` with merchant API secret
+  // 2. RSA verify the body using the cached Binance public certificate
+  //    identified by BinancePay-Certificate-SN (refetched if cache misses)
+  verify(headers: WebhookHeaders, rawBody: Buffer): Promise<VerifyResult>
+}
+
+class BinanceCertificateCache {
+  // 1-hour TTL, refresh-ahead. Calls /binancepay/openapi/certificates with a
+  // signed merchant request when the cache misses or the requested SN is unknown.
+  getPublicKey(certSn: string): Promise<crypto.KeyObject>
+}
+```
+
+Request signing (used by every outbound call): `signature = HMAC_SHA512(secret, `${timestamp}\n${nonce}\n${body}\n`).hex().toUpperCase()`. Headers sent: `BinancePay-Timestamp`, `BinancePay-Nonce`, `BinancePay-Certificate-SN` (= API key), `BinancePay-Signature`. Timeouts: 8s connect + 12s read; 3 retries with exponential backoff (0.5s, 1s, 2s) only on 5xx and network errors, never on 4xx.
+
+### BinanceOrderService (`src/payment/binance/`)
+
+```ts
+class BinanceOrderService {
+  // R21.1, R21.2, R21.4 — buyer creates an order
+  createOrderForDeal(deal: DealRoom, buyer: User): Promise<BinanceCheckoutPayload>
+
+  // R21.10 — reconciliation poll for stuck PENDING orders
+  reconcilePendingOrders(): Promise<void>
+}
+
+class BinanceWebhookService {
+  // R21.6, R21.7, R21.8, R21.9, R21.11, R21.12 — handles every event type
+  handle(headers: WebhookHeaders, rawBody: Buffer): Promise<{ code: 'SUCCESS' | 'FAIL' }>
+}
+```
+
+`BinanceWebhookService.handle` flow: verify signature → check timestamp skew (±5 min) → look up `BinanceOrder` by `merchantTradeNo` → check idempotency on `(prepayId, eventType, nonce)` → dispatch on `eventType` → call `WalletService.settleEscrowFromBinance(...)` for `PAY_SUCCESS` (idempotent on already-`PAID` orders, R21.9) — all inside a single `$transaction`.
+
+### BinancePayoutService (`src/withdrawal/binance/`)
+
+```ts
+class BinancePayoutService {
+  // R22.5 — admin-triggered, called from WithdrawalService.approve when destination=binance
+  initiatePayout(req: WithdrawalRequest, admin: User, tx: Tx): Promise<{ payoutTransactionId: string }>
+
+  // R22.8 — reconciliation poll for outstanding payouts
+  reconcileOutstandingPayouts(): Promise<void>
+}
+
+class BinancePayoutWebhookService {
+  // R22.7 — payout-callback signature verification + status update
+  handle(headers: WebhookHeaders, rawBody: Buffer): Promise<{ code: 'SUCCESS' | 'FAIL' }>
+}
+```
+
+The buyer-order webhook and the payout-callback webhook are **separate endpoints** (`/v1/payment/binance/webhook` and `/v1/withdrawal/binance/webhook`) so we can rotate or disable one without affecting the other and so log filters keep the two flows distinct.
+
 ### WithdrawalService (`src/withdrawal/`)
 
 ```ts
 class WithdrawalService {
-  create(seller: User, dto: CreateWithdrawalDto): Promise<WithdrawalRequest>    // R15
+  create(seller: User, dto: CreateWithdrawalDto): Promise<WithdrawalRequest>    // R15, R22.1–R22.4
   list(filter: { status?: WithdrawalStatus }, page: PageCursor): Promise<Paginated<WithdrawalRequest>>
   get(id: string): Promise<WithdrawalRequest>
-  approve(id: string, admin: User, dto: ApproveDto): Promise<WithdrawalRequest> // R16.2
+  approve(id: string, admin: User, dto: ApproveDto): Promise<WithdrawalRequest> // R16.2; for destination=binance also calls BinancePayoutService.initiatePayout (R22.5)
   reject(id: string, admin: User, dto: RejectDto): Promise<WithdrawalRequest>   // R16.3
 }
 ```
@@ -394,7 +568,9 @@ CREATE TYPE participant_role AS ENUM ('buyer','seller','admin');
 CREATE TYPE creator_source AS ENUM ('web','telegram');
 CREATE TYPE preferred_lang AS ENUM ('km','en','zh');
 CREATE TYPE withdrawal_status AS ENUM ('pending_admin_review','paid','rejected');
-CREATE TYPE withdrawal_destination AS ENUM ('khqr','bank');
+CREATE TYPE withdrawal_destination AS ENUM ('khqr','bank','binance');
+CREATE TYPE binance_order_status AS ENUM ('PENDING','PAID','EXPIRED','CANCELED','REFUNDED');
+CREATE TYPE binance_payout_status AS ENUM ('PENDING','PROCESSING','SUCCESS','FAILED');
 CREATE TYPE dispute_reason AS ENUM (
   'ITEM_NOT_RECEIVED','WRONG_ITEM','DAMAGED_ITEM','FAKE_ITEM','PAYMENT_PROBLEM','OTHER'
 );
@@ -664,8 +840,12 @@ WithdrawalRequest
   bank_account_name  TEXT?
   bank_account_number TEXT?
 
+  -- when destination = 'binance' (R22.2)
+  binance_pay_id     TEXT?                              -- numeric 9–19 chars
+  binance_email      TEXT?                              -- valid email; mutex with binance_pay_id
+
   status             withdrawal_status! default 'pending_admin_review'
-  payout_reference   TEXT?
+  payout_reference   TEXT?                              -- for destination=binance, holds payoutTransactionId
   rejection_reason   TEXT?
   admin_note         TEXT?
   reviewed_by        TEXT? FK User.id
@@ -673,6 +853,61 @@ WithdrawalRequest
   created_at         TIMESTAMPTZ! default now()
   INDEX (seller_user_id, created_at DESC)
   INDEX (status, created_at DESC)                    -- admin queue listing (R16.1)
+  CHECK (
+    (destination_type = 'khqr'    AND (khqr_string IS NOT NULL OR khqr_image_key IS NOT NULL)) OR
+    (destination_type = 'bank'    AND bank_name IS NOT NULL AND bank_account_name IS NOT NULL AND bank_account_number IS NOT NULL) OR
+    (destination_type = 'binance' AND ((binance_pay_id IS NOT NULL) <> (binance_email IS NOT NULL)))
+  )
+```
+
+### Binance Pay records (R21, R22)
+
+```
+BinanceOrder                                     -- R21.4
+  id                  TEXT PK
+  deal_id             TEXT! FK DealRoom.id
+  buyer_user_id       TEXT! FK User.id
+  merchant_trade_no   TEXT! UNIQUE                -- our id sent to Binance; equals deal.public_id + suffix
+  prepay_id           TEXT! UNIQUE                -- returned by Binance create-order
+  amount              NUMERIC(18,2)!
+  currency            currency!                   -- 'USD' for MVP; KHR rejected at controller (R21.3)
+  status              binance_order_status! default 'PENDING'
+  qrcode_link         TEXT?
+  deeplink            TEXT?
+  universal_url       TEXT?
+  expire_time         TIMESTAMPTZ!                -- ≤ now() + 30min
+  last_polled_at      TIMESTAMPTZ?                -- reconciliation cursor (R21.10)
+  paid_at             TIMESTAMPTZ?
+  raw_create_response JSONB!                      -- redacted via Pino on read
+  created_at          TIMESTAMPTZ! default now()
+  INDEX (deal_id)
+  INDEX (status, created_at)                      -- reconciliation hot path
+
+BinanceOrderEvent                                 -- R21.11 webhook idempotency + audit trail
+  id              BIGSERIAL PK
+  prepay_id       TEXT! FK BinanceOrder.prepay_id
+  event_type      TEXT!                            -- 'PAY_SUCCESS' | 'PAY_CLOSED' | 'PAY_REFUND'
+  nonce           TEXT!                            -- BinancePay-Nonce header value
+  certificate_sn  TEXT!
+  raw_body_sha256 TEXT!                            -- hash of inbound body (for audit)
+  applied         BOOLEAN! default false           -- false on duplicate replays
+  received_at     TIMESTAMPTZ! default now()
+  UNIQUE (prepay_id, event_type, nonce)            -- dedup key (R21.11)
+
+BinancePayout                                     -- R22.5
+  id                    TEXT PK
+  withdrawal_id         TEXT! FK WithdrawalRequest.id UNIQUE
+  merchant_send_id      TEXT! UNIQUE               -- equals withdrawal.id (idempotency key on outbound payout)
+  payout_transaction_id TEXT? UNIQUE               -- returned by Binance payout API
+  payee_pay_id          TEXT?
+  payee_email           TEXT?
+  amount                NUMERIC(18,2)!
+  currency              currency!
+  status                binance_payout_status! default 'PENDING'
+  last_polled_at        TIMESTAMPTZ?               -- reconciliation cursor (R22.8)
+  raw_initiate_response JSONB?
+  created_at            TIMESTAMPTZ! default now()
+  INDEX (status, created_at)
 ```
 
 ### Audit log and notifications
@@ -944,6 +1179,54 @@ flowchart LR
 - Permanent failure leaves the row `failed` with `last_error`. The outgoing change is **not** rolled back, satisfying R19.11.
 - Because rows are inserted inside the originating transaction, we never have a "notification with no business effect" or vice-versa.
 
+### Binance Pay request signing (R21.6, R22.7)
+
+Outbound merchant API calls and inbound webhook verification share the same HMAC-SHA512 scheme.
+
+**Outbound (`BinancePayClient`):**
+
+```
+const timestamp = Date.now().toString();
+const nonce = crypto.randomBytes(16).toString('hex'); // 32-char alnum
+const payload = `${timestamp}\n${nonce}\n${body}\n`;
+const signature = crypto
+  .createHmac('sha512', merchantApiSecret)
+  .update(payload)
+  .digest('hex')
+  .toUpperCase();
+
+req.headers = {
+  'BinancePay-Timestamp': timestamp,
+  'BinancePay-Nonce': nonce,
+  'BinancePay-Certificate-SN': merchantApiKey,
+  'BinancePay-Signature': signature,
+  'Content-Type': 'application/json',
+};
+```
+
+Retries: 3 attempts, exponential backoff (0.5s, 1s, 2s), only on 5xx and network errors. Never retry on 4xx (Binance's order-creation 4xx responses are deterministic — retrying could double-create when combined with our `merchantTradeNo` UNIQUE constraint).
+
+**Inbound webhook verification (`BinancePaySignatureVerifier`):**
+
+1. Reject if `BinancePay-Timestamp` is absent or skew exceeds ±5 minutes (R21.7).
+2. Recompute the HMAC-SHA512 over `${timestamp}\n${nonce}\n${rawBody}\n` with the merchant API secret. Reject on mismatch (R21.6).
+3. Resolve the Binance public certificate by `BinancePay-Certificate-SN`: hit `BinanceCertificateCache` (1-hour TTL) — on cache miss call `/binancepay/openapi/certificates` with a signed merchant request to fetch and parse the cert.
+4. Verify the `BinancePay-Signature` as an RSA-SHA256 signature of `rawBody` using the resolved public key. Reject on mismatch.
+5. Look up `BinanceOrder` by `merchantTradeNo`. If not found, reject (R21.7).
+6. Look up `BinanceOrderEvent` by `(prepay_id, event_type, nonce)`. If found, return HTTP 200 `{ code: 'SUCCESS' }` without writing — duplicate replay (R21.11).
+7. Otherwise, dispatch to the appropriate handler **inside a single `$transaction`** that also inserts the `BinanceOrderEvent` row marking it `applied=true` and the `WalletLedgerEntry` / `AuditLogEntry` rows.
+
+**Webhook response contract:** Binance retries up to 5 times with backoff on any non-2xx response. We always return `{ code: 'SUCCESS' }` for verified+applied events and for verified+already-applied duplicates. We return 401 with `{ code: 'FAIL' }` for any signature/timestamp/lookup failure so Binance retries (an attacker can't induce retries because they can't produce valid signatures).
+
+### Binance Pay reconciliation poll (R21.10, R22.8)
+
+Two BullMQ jobs (or NestJS `@Cron` workers; both Redis-backed for cluster safety):
+
+- `binance.reconcile.order` — every 60s, `SELECT ... FOR UPDATE SKIP LOCKED` over `BinanceOrder WHERE status='PENDING' AND created_at < now() - interval '60 seconds' AND (last_polled_at IS NULL OR last_polled_at < now() - interval '60 seconds') LIMIT 50`. For each row, call `BinancePayClient.queryOrder(merchantTradeNo)`. Apply terminal status (`PAID`, `EXPIRED`, `CANCELED`) using the same single-transaction logic as the webhook handler. Update `last_polled_at` on every poll.
+- `binance.reconcile.payout` — every 60s, same pattern over `BinancePayout WHERE status IN ('PENDING','PROCESSING')`. Calls `BinancePayClient.queryPayout(payoutTransactionId)`.
+
+Why polling matters even with webhooks: Binance retries webhooks 5 times then gives up. Network blips, certificate cache thrash, or a hot reload during deploy can land in that window. The reconciliation pass guarantees at-least-once settlement bounded by `60s + payment-API latency` even when every webhook is lost.
+
 ### Idempotency
 
 Sensitive POST endpoints accept an `Idempotency-Key` header (UUID string). The middleware:
@@ -960,6 +1243,7 @@ Scopes used:
 | `approve_withdrawal` | `POST /v1/admin/withdrawals/:id/approve` |
 | `reject_withdrawal` | `POST /v1/admin/withdrawals/:id/reject` |
 | `khqr_receipt` | `POST /v1/deals/:publicId/payment/khqr/receipt` |
+| `binance_create_order` | `POST /v1/deals/:publicId/payment/binance` (key = deal id; collapses double-tap "Pay with Binance") |
 | `tg_create` | Telegram bot deal creation (key = `<chat_id>:<conversation_id>`) |
 
 ### Token strategy
@@ -1041,20 +1325,31 @@ All deal endpoints below now require an authenticated session **except** `GET /v
 | POST | `/v1/deals/:publicId/confirm-received` | session, buyer role; `Idempotency-Key` recommended | — | `DealRoomResponse` | R13 |
 | POST | `/v1/deals/:publicId/disputes` | session, participant role | `{ reason, message, evidence_keys[] }` | `DealRoomResponse` | R17 |
 
-### Payment (new — Wallet and KHQR options)
+### Payment (new — Wallet, KHQR, and Binance Pay options)
 
 | Method | Path | Auth | Body | Response | Implements |
 |---|---|---|---|---|---|
 | POST | `/v1/deals/:publicId/payment/wallet` | session, buyer role | — | `DealRoomResponse` (`PAID_ESCROWED → SELLER_PREPARING`) | R9 |
 | POST | `/v1/deals/:publicId/payment/khqr` | session, buyer role | — | `{ khqr_string, khqr_image_url, reference_note, amount_due, currency, receiver_name, bakong_account_id }` | R10.1, R10.2, R10.3 |
 | POST | `/v1/deals/:publicId/payment/khqr/receipt` | session, buyer role; `Idempotency-Key` recommended | `{ paid_amount?, buyer_note?, attachment_key? }` | `DealRoomResponse` (`READY_FOR_PAYMENT → PAYMENT_PENDING_VERIFICATION`) | R10.4–R10.7 |
+| POST | `/v1/deals/:publicId/payment/binance` | session, buyer role; `Idempotency-Key` recommended | — | `{ prepay_id, qrcode_link, deeplink, universal_url, expire_time }` (≤5s) | R21.1, R21.2, R21.4 |
+| GET  | `/v1/deals/:publicId/payment/binance/status` | session, buyer role | — | `{ binance_order_status, deal_status }` | R21.10 |
 | POST | `/v1/storage/uploads/sign` | session | `{ kind: 'payment_receipt' \| 'shipping' \| 'dispute' \| 'withdrawal_khqr', mime, size }` | `{ object_key, put_url, expires_at }` | R10.6, R10.7, R12.4 |
+
+### Binance Pay webhooks (public, signature-verified)
+
+These two endpoints are publicly reachable (registered with Binance Pay's merchant portal) and authenticate **only** via `BinancePay-*` signature headers — no session, no rate-limiter exception. Both are exempt from the global throttler because Binance has its own retry policy; instead they are protected by IP allowlist when Binance publishes one and by mandatory signature verification on every request.
+
+| Method | Path | Auth | Body | Response | Implements |
+|---|---|---|---|---|---|
+| POST | `/v1/payment/binance/webhook` | `BinancePay-Timestamp/Nonce/Certificate-SN/Signature` headers | Binance event payload (`PAY_SUCCESS \| PAY_CLOSED \| PAY_REFUND`) | `{ code: 'SUCCESS' }` on apply or duplicate; `{ code: 'FAIL' }` HTTP 401 on signature failure | R21.6–R21.9, R21.11, R21.12 |
+| POST | `/v1/withdrawal/binance/webhook` | `BinancePay-*` headers | payout-callback payload (`SUCCESS \| FAILED`) | `{ code: 'SUCCESS' }` or `{ code: 'FAIL' }` HTTP 401 | R22.7 |
 
 ### Withdrawal (new)
 
 | Method | Path | Auth | Body | Response | Implements |
 |---|---|---|---|---|---|
-| POST | `/v1/withdrawals` | session, seller-eligible | `{ currency, amount, destination_type, ...destination_fields }` | `WithdrawalRequest` | R15 |
+| POST | `/v1/withdrawals` | session, seller-eligible | `{ currency, amount, destination_type, ...destination_fields }` (destination_fields per R15.3, R15.4, R22.2) | `WithdrawalRequest` | R15, R22.1–R22.4 |
 | GET  | `/v1/withdrawals/me?status=&cursor=&limit=` | session | `{ entries, nextCursor }` | R15 |
 | GET  | `/v1/withdrawals/:id` | session, owner only | `WithdrawalRequest` | R15 |
 
@@ -1253,7 +1548,8 @@ The bot token is read from `TELEGRAM_BOT_TOKEN` env. It is never logged, never e
 - **CORS.** NestJS `enableCors({ origin: corsOrigins.length > 0 ? corsOrigins : (nodeEnv === 'development'), credentials: true })` where `corsOrigins` is parsed from the comma-separated `CORS_ORIGINS` env. Wildcard origins are forbidden in production (empty `CORS_ORIGINS` in prod blocks all origins; empty in dev allows all). The runtime wiring lives in `backend/src/main.ts`.
 - **Rate limiting.** Two layers — NestJS `@Throttle` and Nginx `limit_req_zone`.
 - **Secrets.** Provided via `.env` mounted into the backend container. `.env` is in `.gitignore`. Bot token, Postgres password, MinIO root password, JWT signing key for admin sessions all live there.
-- **Logging.** Structured JSON via `pino`. A redaction list strips `password`, `password_hash`, `token`, `raw_*_token`, `Authorization`, `Cookie`, `TELEGRAM_BOT_TOKEN`, and any field matching `*_secret`.
+- **Logging.** Structured JSON via `pino`. A redaction list strips `password`, `password_hash`, `token`, `raw_*_token`, `Authorization`, `Cookie`, `TELEGRAM_BOT_TOKEN`, `BINANCE_PAY_API_SECRET`, `BinancePay-Signature`, and any field matching `*_secret`.
+- **Binance Pay credentials.** `BINANCE_PAY_API_SECRET` is read once at boot into a non-enumerable property of `BinancePayClient`; it never appears in error envelopes, audit rows, notification payloads, or `BinanceOrder.raw_create_response` (responses are stored after stripping any `signature`/`secret` field). Webhook signature verification logs the certificate serial and a SHA-256 digest of the request body, never the body itself, when verification fails (R21.13).
 
 ### Observability
 
@@ -1386,6 +1682,12 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       BAKONG_ACCOUNT_ID: ${BAKONG_ACCOUNT_ID}
       BAKONG_API_TOKEN: ${BAKONG_API_TOKEN}
+      BINANCE_PAY_BASE_URL: ${BINANCE_PAY_BASE_URL:?required}
+      BINANCE_PAY_API_KEY: ${BINANCE_PAY_API_KEY:?required}
+      BINANCE_PAY_API_SECRET: ${BINANCE_PAY_API_SECRET:?required}
+      BINANCE_PAY_WEBHOOK_BUYER_URL: ${BINANCE_PAY_WEBHOOK_BUYER_URL:?required}
+      BINANCE_PAY_WEBHOOK_PAYOUT_URL: ${BINANCE_PAY_WEBHOOK_PAYOUT_URL:?required}
+      BINANCE_PAY_SANDBOX: ${BINANCE_PAY_SANDBOX:-true}
       ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_BOOTSTRAP_EMAIL:?required}
       ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:?required}
     depends_on:

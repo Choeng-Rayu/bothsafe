@@ -627,6 +627,128 @@ Convention for this file:
   - [~] 15.8 Final checkpoint
     - Ensure all tests pass, ask the user if questions arise.
 
+- [ ] 16. Implement Binance Pay buyer payment (R21)
+  - [ ] 16.1 Add `BinanceOrder`, `BinanceOrderEvent` Prisma models and migration
+    - Native enum `binance_order_status` per design.
+    - `BinanceOrder.merchant_trade_no UNIQUE`, `prepay_id UNIQUE`, `expire_time` ≤ now() + 30min.
+    - `BinanceOrderEvent UNIQUE (prepay_id, event_type, nonce)` for webhook dedup.
+    - _Requirements: R21.4, R21.11_
+
+  - [ ] 16.2 Extend `.env.example` and Joi env validation with `BINANCE_PAY_*`
+    - Required: `BINANCE_PAY_BASE_URL`, `BINANCE_PAY_API_KEY`, `BINANCE_PAY_API_SECRET`, `BINANCE_PAY_WEBHOOK_BUYER_URL`, `BINANCE_PAY_WEBHOOK_PAYOUT_URL`. Optional: `BINANCE_PAY_SANDBOX` (default `true`).
+    - Add same redaction entries to the Pino logger config (`BINANCE_PAY_API_SECRET`, `BinancePay-Signature`).
+    - _Requirements: R21.13_
+
+  - [ ] 16.3 Implement `BinancePayClient` (`src/binance-pay/`)
+    - `createOrder`, `queryOrder`, `payout`, `queryPayout` with HMAC-SHA512 signing.
+    - 8s connect + 12s read timeout; 3 retries with exponential backoff (0.5/1/2s) only on 5xx and network errors; never on 4xx.
+    - `BinancePayCertificateCache` — 1h TTL, refresh-ahead, fetched via `/binancepay/openapi/certificates` with a signed merchant request.
+    - Strip `signature` and `secret` fields from responses before returning to callers.
+    - _Requirements: R21.6, R22.5, design "Binance Pay request signing"_
+
+  - [ ] 16.4 Implement `BinancePaySignatureVerifier`
+    - HMAC-SHA512 over `${timestamp}\n${nonce}\n${rawBody}\n` against merchant secret.
+    - RSA-SHA256 verify of `BinancePay-Signature` against cert resolved from `BinancePay-Certificate-SN`.
+    - Reject on missing headers, ±5min timestamp skew, hash mismatch, or unknown cert serial.
+    - _Requirements: R21.6, R21.7, R22.7_
+
+  - [ ] 16.5 Implement `BinanceOrderService.createOrderForDeal`
+    - Buyer-only; reject when deal Currency is KHR with `payment.binance_currency_unsupported`.
+    - Idempotency scope `binance_create_order` keyed on deal id (prevents double-tap double orders).
+    - Single tx: insert `BinanceOrder` row, transition `READY_FOR_PAYMENT → PAYMENT_PENDING_VERIFICATION`, write Audit_Log.
+    - On Binance API failure after retries: leave Deal_Status at `READY_FOR_PAYMENT`, return `payment.binance_unavailable`, do NOT persist a `BinanceOrder` row.
+    - _Requirements: R21.1, R21.2, R21.3, R21.4, R21.5_
+
+  - [ ] 16.6 Implement `BinanceWebhookService.handle` (POST `/v1/payment/binance/webhook`)
+    - Verify signature → check timestamp skew → look up by `merchantTradeNo` → dedup on `(prepay_id, event_type, nonce)`.
+    - On `PAY_SUCCESS` for `PENDING` order: single tx — set `BinanceOrder.status=PAID`, call `WalletService.settleEscrowFromBinance`, transition `PAYMENT_PENDING_VERIFICATION → PAID_ESCROWED → SELLER_PREPARING`, audit, outbox `PAYMENT_VERIFIED + SELLER_SHOULD_SHIP`.
+    - On `PAY_SUCCESS` for already-`PAID` order: respond 200 `{ code: 'SUCCESS' }` no-op.
+    - On `PAY_REFUND` for `PAID` order: single tx — `BinanceOrder.status=REFUNDED`, `BUYER_REFUND_SENT` ledger entry on buyer wallet, transition to `REFUNDED`, outbox `REFUND_COMPLETED`.
+    - On `PAY_CLOSED` for `PENDING` order: set status `CANCELED`, transition Deal_Status back to `READY_FOR_PAYMENT`, no ledger entry.
+    - On signature/timestamp/lookup failure: respond HTTP 401 `{ code: 'FAIL' }` and log `prepayId`/cert SN/reason.
+    - _Requirements: R21.6–R21.9, R21.11, R21.12_
+
+  - [ ] 16.7 Implement `WalletService.settleEscrowFromBinance` and `refundFromBinance`
+    - Same shape as `settleEscrowFromKhqr`: insert `ESCROW_RECEIVED` credit on escrow wallet inside the caller's tx; transition `PAID_ESCROWED → SELLER_PREPARING`.
+    - `refundFromBinance`: insert `BUYER_REFUND_SENT` debit/credit pair, transition to `REFUNDED`.
+    - _Requirements: R21.8, R21.12, R14.4_
+
+  - [ ] 16.8 Implement reconciliation processor `binance.reconcile.order`
+    - BullMQ cron job every 60s on Redis.
+    - `SELECT ... FOR UPDATE SKIP LOCKED` over `BinanceOrder WHERE status='PENDING' AND created_at < now() - interval '60s' AND (last_polled_at IS NULL OR last_polled_at < now() - interval '60s') LIMIT 50`.
+    - On `PAID` response: same single-tx settlement logic as the webhook handler.
+    - On `EXPIRED`/`CANCELED`: set `BinanceOrder.status` and revert `PAYMENT_PENDING_VERIFICATION → READY_FOR_PAYMENT`.
+    - Update `last_polled_at` on every poll.
+    - _Requirements: R21.10_
+
+  - [ ] 16.9 Frontend: `Pay with Binance` panel on Deal Room
+    - Add `pay_with_binance` to allowed-action rendering; on click POST `/v1/deals/:publicId/payment/binance` and show the returned `qrcode_link` (image), `deeplink`, and `universal_url` with copy buttons.
+    - Poll `GET /v1/deals/:publicId/payment/binance/status` every 5s up to 5min for status changes.
+    - Localised i18n keys under `payment.binance.*`.
+    - _Requirements: R21.1, R21.2_
+
+  - [ ] 16.10 Property test: webhook idempotency*
+    - **Property: at-most-once apply** — for any sequence of identical webhook deliveries (`prepay_id`, `event_type`, `nonce`), the ledger has exactly one `ESCROW_RECEIVED` row and Deal_Status reaches `SELLER_PREPARING` exactly once.
+    - **Validates: R21.8, R21.9, R21.11**
+
+  - [ ] 16.11 Unit test: signature verifier rejection paths*
+    - Stale timestamp, wrong HMAC, unknown cert SN, missing header — each returns HTTP 401 and writes no rows.
+    - **Validates: R21.6, R21.7**
+
+  - [ ] 16.12 Integration test: Binance sandbox happy path*
+    - Using recorded fixtures (since merchant approval pending), exercise create-order → webhook → reconciliation → query-order parity.
+    - **Validates: R21.4, R21.8, R21.10**
+
+- [ ] 17. Implement Binance Pay seller withdrawal (R22)
+  - [ ] 17.1 Extend `WithdrawalRequest` schema with `binance_pay_id`, `binance_email`, `binance` enum value
+    - Add `'binance'` to `withdrawal_destination` enum.
+    - Add `BinancePayout` Prisma model with `binance_payout_status` enum.
+    - Add CHECK constraint enforcing the destination-specific field requirements per design.
+    - _Requirements: R22.1, R22.2, R22.4_
+
+  - [ ] 17.2 Extend `WithdrawalService.create` validation for `binance` destination
+    - Require exactly one of `binance_pay_id` (9–19 numeric) or `binance_email`.
+    - Reject KHR with `withdrawal.invalid_field` (`{ field: 'currency' }`).
+    - Hold logic stays identical (single tx, `SELLER_PAYOUT_PENDING`).
+    - _Requirements: R22.1–R22.4_
+
+  - [ ] 17.3 Implement `BinancePayoutService.initiatePayout`
+    - Called from `WithdrawalService.approve` when `destination_type='binance'`.
+    - Build `merchantSendId = withdrawal.id` for outbound idempotency.
+    - On `PROCESSING`/`SUCCESS` Binance response: single tx — write `SELLER_PAYOUT_SENT`, set `WithdrawalRequest.status='paid'`, persist `payout_reference = payoutTransactionId`, insert `BinancePayout` row, audit per R16.7.
+    - On Binance API failure after retries: leave `pending_admin_review`, return `withdrawal.binance_payout_failed { error_code }`, do NOT write any ledger entry.
+    - _Requirements: R22.5, R22.6_
+
+  - [ ] 17.4 Implement payout webhook (POST `/v1/withdrawal/binance/webhook`)
+    - Same signature verification path as 16.4 / 16.6.
+    - On verified `SUCCESS` for already-`paid` request: respond 200 no-op.
+    - On verified `FAILED`: single tx — write compensating `ADJUSTMENT` credit equal to held amount, set `WithdrawalRequest.status='rejected'` reason `binance_payout_failed`, audit, outbox seller notification.
+    - _Requirements: R22.7_
+
+  - [ ] 17.5 Implement reconciliation processor `binance.reconcile.payout`
+    - BullMQ cron every 60s.
+    - Polls `BinancePayout WHERE status IN ('PENDING','PROCESSING')` with `FOR UPDATE SKIP LOCKED`.
+    - Calls `BinancePayClient.queryPayout`. On terminal status, applies the same logic as the payout webhook handler.
+    - _Requirements: R22.8_
+
+  - [ ] 17.6 Admin guard on payout API call
+    - Only `WithdrawalService.approve` may call `BinancePayoutService.initiatePayout`. The route is admin-gated already; add a service-level check that the caller's `User.is_admin` is true and audit any rejected attempt for the existing audit table without writing a ledger entry.
+    - _Requirements: R22.9_
+
+  - [ ] 17.7 Frontend: extend `WithdrawalForm` with `binance` destination toggle
+    - Tabs: `KHQR`, `Bank`, `Binance`. Binance tab shows two mutually-exclusive inputs `Binance Pay ID` (numeric, 9–19) and `Email`.
+    - Hide KHR option when Binance tab is active.
+    - i18n keys under `withdrawal.binance.*`.
+    - _Requirements: R22.1, R22.2, R22.3_
+
+  - [ ] 17.8 Property test: payout reconciliation idempotency*
+    - **Property: at-most-once payout settlement** — repeated `SUCCESS` callbacks and reconciliation hits never produce a second `SELLER_PAYOUT_SENT` ledger row.
+    - **Validates: R22.5, R22.7, R22.8**
+
+  - [ ] 17.9 Integration test: payout failure compensation*
+    - Mock Binance `FAILED` callback; assert ledger holds zero net change, `WithdrawalRequest` ends `rejected`, seller available_balance returns to pre-create value.
+    - **Validates: R22.7, R15.8**
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for a faster MVP path; they cover unit, property, and integration tests.
@@ -780,11 +902,22 @@ flowchart LR
     T1310["13.10"]; T1311["13.11"]; T1315["13.15*"]
   end
 
-  subgraph W29["Wave 29 — Cross-cutting property tests"]
+  subgraph W29[Wave 29 — Binance Pay buyer payment]
+    T161["16.1"]; T162["16.2"]; T163["16.3"]; T164["16.4"]; T165["16.5"]
+    T166["16.6"]; T167["16.7"]; T168["16.8"]; T169["16.9"]
+    T1610["16.10*"]; T1611["16.11*"]; T1612["16.12*"]
+  end
+
+  subgraph W30[Wave 30 — Binance Pay seller withdrawal]
+    T171["17.1"]; T172["17.2"]; T173["17.3"]; T174["17.4"]; T175["17.5"]
+    T176["17.6"]; T177["17.7"]; T178["17.8*"]; T179["17.9*"]
+  end
+
+  subgraph W31["Wave 31 — Cross-cutting property tests"]
     T141["14.1*"]; T142["14.2*"]; T143["14.3*"]; T144["14.4*"]; T145["14.5*"]
   end
 
-  subgraph W30["Wave 30 — Deployment finalization"]
+  subgraph W32["Wave 32 — Deployment finalization"]
     T151["15.1"]; T152["15.2"]; T153["15.3"]; T154["15.4"]
     T155["15.5"]; T156["15.6"]; T157["15.7"]
   end
@@ -792,7 +925,7 @@ flowchart LR
   W0 --> W1 --> W2 --> W3 --> W4 --> W5 --> W6 --> W7 --> W8 --> W9 --> W10
   W10 --> W11 --> W12 --> W13 --> W14 --> W15 --> W16 --> W17 --> W18
   W18 --> W19 --> W20 --> W21 --> W22 --> W23 --> W24 --> W25 --> W26
-  W26 --> W27 --> W28 --> W29 --> W30
+  W26 --> W27 --> W28 --> W29 --> W30 --> W31 --> W32
 ```
 
 ### JSON wave schedule (machine-readable)
@@ -829,8 +962,10 @@ flowchart LR
     { "id": 26, "tasks": ["12.9", "12.10", "13.1", "13.12", "13.13", "13.14"] },
     { "id": 27, "tasks": ["13.2", "13.3", "13.4", "13.5", "13.6", "13.7", "13.8", "13.9"] },
     { "id": 28, "tasks": ["13.10", "13.11", "13.15"] },
-    { "id": 29, "tasks": ["14.1", "14.2", "14.3", "14.4", "14.5"] },
-    { "id": 30, "tasks": ["15.1", "15.2", "15.3", "15.4", "15.5", "15.6", "15.7"] }
+    { "id": 29, "tasks": ["16.1", "16.2", "16.3", "16.4", "16.5", "16.6", "16.7", "16.8", "16.9", "16.10", "16.11", "16.12"] },
+    { "id": 30, "tasks": ["17.1", "17.2", "17.3", "17.4", "17.5", "17.6", "17.7", "17.8", "17.9"] },
+    { "id": 31, "tasks": ["14.1", "14.2", "14.3", "14.4", "14.5"] },
+    { "id": 32, "tasks": ["15.1", "15.2", "15.3", "15.4", "15.5", "15.6", "15.7"] }
   ]
 }
 ```

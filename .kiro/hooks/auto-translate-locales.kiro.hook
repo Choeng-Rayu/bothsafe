@@ -1,0 +1,29 @@
+{
+  "enabled": true,
+  "name": "Auto Translate Locale Files",
+  "description": "Watches the primary-language localization files (English by default). On save, identifies new or modified keys and generates translations for the other configured target languages (km, zh) while preserving context, ICU placeholders, HTML/markdown, and locale conventions.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/locales/en/**/*.json",
+      "**/locales/en/**/*.yaml",
+      "**/locales/en/**/*.yml",
+      "**/i18n/en/**/*.json",
+      "**/i18n/en/**/*.yaml",
+      "**/i18n/en/**/*.yml",
+      "**/messages/en.json",
+      "**/messages/en.yaml",
+      "**/messages/en.yml",
+      "**/translations/en/**/*.json",
+      "**/translations/en/**/*.yaml",
+      "**/translations/en/**/*.yml",
+      "**/lang/en/**/*.json",
+      "**/lang/en.json"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A primary-language (English) localization file just changed. Sync translations into the other target languages.\n\nSteps:\n1. Identify the changed file's locale namespace and format (JSON/YAML). Treat this file as the source of truth.\n2. Determine target locales by inspecting sibling locale folders/files. For BothSafe, expected targets are `km` (Khmer) and `zh` (Chinese). Skip locales that don't already exist in the project.\n3. Diff the source against each target file:\n   - Add missing keys with translated values.\n   - Update keys whose source value changed (only when the existing translation clearly mirrors the old source; otherwise flag with a `// TODO(review)` or `# TODO(review)` comment if the format supports it, else leave a sibling `__review` marker key).\n   - Remove keys deleted from the source.\n4. When translating:\n   - Preserve ICU/MessageFormat placeholders (e.g. `{name}`, `{count, plural, ...}`), HTML tags, markdown, and escape sequences exactly.\n   - Keep key ordering and nesting identical to the source file.\n   - Respect locale conventions (Khmer spacing/no Latin punctuation where unnatural, Simplified Chinese full-width punctuation where appropriate).\n   - Keep brand/product names like `BothSafe`, `Telegram`, `KHQR`, `MinIO` untranslated.\n   - For domain terms (escrow, deal room, payout, dispute), use consistent translations across files; reuse existing translations already present in target files when available.\n5. Write the updated target files using the same format and indentation as the source.\n6. Report a concise summary: which target files were updated, counts of added / updated / removed / flagged keys, and any keys you could not confidently translate.\n\nDo not modify the source English file. Do not introduce new locales. If no target locale files exist yet, just print a notice and stop."
+  }
+}
