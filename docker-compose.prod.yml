@@ -1,0 +1,186 @@
+# BothSafe production stack — single VPS, Docker Compose.
+#
+# Brings up: nginx + frontend + backend + postgres + minio + redis.
+# Only nginx is bound to host ports (80/443). Everything else stays on the
+# internal docker network.
+#
+# Required env (loaded from .env in this directory):
+#   POSTGRES_PASSWORD, MINIO_ROOT_USER, MINIO_ROOT_PASSWORD,
+#   JWT_SECRET, SESSION_SECRET, ENCRYPTION_MASTER_KEY,
+#   ADMIN_BOOTSTRAP_EMAIL, ADMIN_BOOTSTRAP_PASSWORD,
+#   APP_BASE_URL, CORS_ORIGINS, CORS_ORIGINS,
+#   BAKONG_ACCOUNT_ID, BAKONG_API_TOKEN,
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_BOT_USERNAME,
+#   TELEGRAM_CLIENT_ID, TELEGRAM_CLIENT_SECRET,
+#   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+#   AUTH_CALLBACK_BASE_URL,
+#   NEXT_PUBLIC_API_BASE, NEXT_PUBLIC_APP_BASE_URL.
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml logs -f backend
+#   docker compose -f docker-compose.prod.yml down              # stop, keep data
+#   docker compose -f docker-compose.prod.yml down -v           # WIPES volumes
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bothsafe-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bothsafe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: bothsafe
+    volumes:
+      - bothsafe-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bothsafe -d bothsafe"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks: [bothsafe-net]
+
+  minio:
+    image: minio/minio:latest
+    container_name: bothsafe-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD required}
+    volumes:
+      - bothsafe-minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks: [bothsafe-net]
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: bothsafe-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
+      mc mb -p local/bothsafe || true &&
+      echo 'minio bucket bothsafe ready'
+      "
+    networks: [bothsafe-net]
+
+  redis:
+    image: redis:7-alpine
+    container_name: bothsafe-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - bothsafe-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [bothsafe-net]
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: bothsafe-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3003
+      APP_BASE_URL: ${APP_BASE_URL}
+      DATABASE_URL: postgresql://bothsafe:${POSTGRES_PASSWORD}@postgres:5432/bothsafe?schema=public
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: bothsafe
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET required}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-1h}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET required}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?ENCRYPTION_MASTER_KEY required}
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-30}
+      INVITE_TOKEN_TTL_HOURS: ${INVITE_TOKEN_TTL_HOURS:-72}
+      DEAL_EXPIRES_HOURS: ${DEAL_EXPIRES_HOURS:-720}
+      PLATFORM_FEE_PERCENT: ${PLATFORM_FEE_PERCENT:-2}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-USD}
+      RECEIVER_ACCOUNT_LABEL: ${RECEIVER_ACCOUNT_LABEL:-BothSafe Escrow (Bakong)}
+      BAKONG_ACCOUNT_ID: ${BAKONG_ACCOUNT_ID}
+      BAKONG_MERCHANT_NAME: ${BAKONG_MERCHANT_NAME:-BothSafe Escrow}
+      BAKONG_MERCHANT_CITY: ${BAKONG_MERCHANT_CITY:-Phnom Penh}
+      BAKONG_API_TOKEN: ${BAKONG_API_TOKEN}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      TELEGRAM_BOT_ENABLED: ${TELEGRAM_BOT_ENABLED:-true}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET}
+      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL}
+      TELEGRAM_CLIENT_ID: ${TELEGRAM_CLIENT_ID}
+      TELEGRAM_CLIENT_SECRET: ${TELEGRAM_CLIENT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      AUTH_CALLBACK_BASE_URL: ${AUTH_CALLBACK_BASE_URL}
+      ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_BOOTSTRAP_EMAIL:?ADMIN_BOOTSTRAP_EMAIL required}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:?ADMIN_BOOTSTRAP_PASSWORD required}
+    networks: [bothsafe-net]
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:?NEXT_PUBLIC_API_BASE required}
+        NEXT_PUBLIC_APP_BASE_URL: ${NEXT_PUBLIC_APP_BASE_URL:?NEXT_PUBLIC_APP_BASE_URL required}
+    container_name: bothsafe-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: production
+      INTERNAL_API_BASE: http://backend:3003
+    networks: [bothsafe-net]
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: bothsafe-nginx
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+      - minio
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - bothsafe-certbot-webroot:/var/www/certbot
+    networks: [bothsafe-net]
+
+volumes:
+  bothsafe-postgres-data:
+  bothsafe-minio-data:
+  bothsafe-redis-data:
+  bothsafe-certbot-webroot:
+
+networks:
+  bothsafe-net:
+    driver: bridge

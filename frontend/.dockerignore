@@ -1,0 +1,17 @@
+# BothSafe — production .dockerignore (frontend)
+node_modules
+.next
+out
+.git
+.gitignore
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+README.md
+AGENTS.md
+CLAUDE.md
+Dockerfile
+.dockerignore
+coverage

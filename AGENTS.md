@@ -12,7 +12,7 @@ Core product: **Deal Room Link** — a shareable URL that both parties use to co
 ## Repository Structure
 
 ```
-/both-safe
+/bothsafe
   /backend          ← NestJS API + Telegram bot module
   /frontend         ← Next.js web app
   /tasks            ← Detailed per-layer task breakdowns
@@ -441,7 +441,7 @@ MySQL and MinIO run in local Docker for the MVP.
 <claude-mem-context>
 # Memory Context
 
-# [both-safe] recent context, 2026-05-06 11:56am GMT+7
+# [bothsafe] recent context, 2026-05-06 11:56am GMT+7
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE

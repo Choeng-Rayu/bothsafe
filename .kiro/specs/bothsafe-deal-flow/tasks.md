@@ -20,26 +20,38 @@ Convention for this file:
 
 ## Tasks
 
-- [ ] 1. Set up Docker Compose stack and infrastructure scaffolding
-  - [ ] 1.1 Create `docker-compose.yml` with `nginx`, `frontend`, `backend`, `postgres`, `minio` services
-    - Bind only Nginx to host 80/443; everything else uses `expose:`.
-    - Define `postgres-data`, `minio-data`, `letsencrypt` named volumes.
-    - Wire healthchecks for `postgres` (`pg_isready`), `minio` (`/minio/health/ready`), and `backend` (`/v1/health`).
-    - Backend depends on postgres+minio being healthy.
-    - _Requirements: design "Deployment Topology"_
+- [x] 1. Set up Docker Compose stack and infrastructure scaffolding
+  - [x] 1.1 Create dev `docker-compose.yml` (data services only) at repo root
+    - Services: `postgres`, `minio`, `minio-init` (one-shot bucket creator), `redis`.
+    - Container names prefixed `bothsafe-dev-` so they coexist with anything else on the developer's machine; host ports shifted to `55432` (postgres), `59000`/`59001` (minio API/console), `56379` (redis).
+    - Healthchecks for postgres (`pg_isready`), minio (`/minio/health/ready`), redis (`redis-cli ping`).
+    - Named volumes: `bothsafe-dev-postgres-data`, `bothsafe-dev-minio-data`, `bothsafe-dev-redis-data`.
+    - Backend and frontend run on the host in dev (`npm run start:dev` / `npm run dev`) — they are NOT in this compose file.
+    - Helper script: `scripts/dev-up.sh {up|down|nuke|logs}`.
+    - _Requirements: design "Deployment Topology → Dev `docker-compose.yml`"_
 
-  - [ ] 1.2 Author Nginx config (`nginx/nginx.conf` + `conf.d/`)
-    - TLS termination, HTTP→HTTPS redirect, `client_max_body_size 12m`.
-    - `limit_req_zone`: `auth` 60r/m, `invite` 120r/m; `burst=20/40 nodelay`.
-    - Routes: `/v1/*` → backend, `/` → frontend, `s3.bothsafe.app` → minio.
-    - Inject `X-Request-Id` upstream.
-    - _Requirements: R1.7, R4.5, design "Nginx config sketch"_
+  - [x] 1.2 Create prod `docker-compose.prod.yml` with Dockerfiles and Nginx config
+    - Six services: `nginx`, `frontend`, `backend`, `bothsafe-postgres`, `bothsafe-minio`, `bothsafe-redis`. Only Nginx binds host ports (80/443); everything else stays on the internal `bothsafe-net` bridge network.
+    - All required secrets use `${VAR:?msg}` so `compose up` fails loudly when `.env` is incomplete.
+    - `backend/Dockerfile`: Node 20-alpine multi-stage (deps → build → runtime), Prisma generate, `npm prune --omit=dev`, `tini` as PID 1 for clean SIGTERM handling.
+    - `frontend/Dockerfile`: Next.js standalone output, runs as non-root `nextjs` user. Requires `output: "standalone"` in `next.config.ts` (set this before first prod build).
+    - `.dockerignore` files in both `backend/` and `frontend/` to keep the build context lean.
+    - `nginx/nginx.conf`: TLS termination via certs at `/etc/nginx/certs/{fullchain,privkey}.pem`, HTTP→HTTPS redirect, `client_max_body_size 12m`, `limit_req_zone` for `auth` (60r/m, burst 20) and `invite` (120r/m, burst 40), `X-Request-Id` propagation, MinIO subdomain server with `proxy_buffering off`.
+    - Routes: `/v1/auth/*` → backend (auth zone), `/v1/deals/*/invite-preview` → backend (invite zone), `/v1/*` → backend, `/` → frontend, `s3.*` → minio.
+    - _Requirements: R1.7, R4.5, design "Deployment Topology → Prod `docker-compose.prod.yml`", design "Nginx config sketch"_
 
-  - [ ] 1.3 Create `backend/.env.example` and `frontend/.env.example`
-    - Backend: `DATABASE_URL`, `MINIO_*`, `FRONTEND_ORIGIN`, `BOT_TELEGRAM_TOKEN`, `GOOGLE_OAUTH_CLIENT_ID`, `SESSION_SECRET`, `BAKONG_API_BASE`, `BAKONG_API_TOKEN`.
-    - Frontend: `NEXT_PUBLIC_API_BASE`.
-    - Add `.env` and `*.dump` to `.gitignore`.
+  - [x] 1.3 Create `backend/.env.example` and `frontend/.env.example`
+    - Backend covers: `NODE_ENV`, `PORT=3003`, `APP_BASE_URL`, `DATABASE_URL` (postgres on `bothsafe-dev-postgres:55432`), `REDIS_URL` (`bothsafe-dev-redis:56379`), `MINIO_*` (`bothsafe-dev-minio:59000`, bucket `bothsafe`), `JWT_SECRET` (≥32 chars), `JWT_EXPIRES_IN`, `JWT_REFRESH_EXPIRES_IN`, `SESSION_SECRET`, `ENCRYPTION_MASTER_KEY`, `SESSION_TTL_DAYS`, `INVITE_TOKEN_TTL_HOURS`, `DEAL_EXPIRES_HOURS`, `PLATFORM_FEE_PERCENT`, `DEFAULT_CURRENCY`, `RECEIVER_ACCOUNT_LABEL`, `BAKONG_*` (`ACCOUNT_ID`, `MERCHANT_NAME`, `MERCHANT_CITY`, `API_TOKEN`), `CORS_ORIGINS`, `TELEGRAM_BOT_*` (`ENABLED`, `TOKEN`, `USERNAME`, `WEBHOOK_SECRET`, `WEBHOOK_URL`, `CLIENT_ID`, `CLIENT_SECRET`), `GOOGLE_CLIENT_*`, `AUTH_CALLBACK_BASE_URL`, `ADMIN_BOOTSTRAP_*`.
+    - Frontend covers: `NEXT_PUBLIC_API_BASE=http://localhost:3003`, `NEXT_PUBLIC_APP_BASE_URL=http://localhost:3000`, `INTERNAL_API_BASE`, `NEXTAUTH_SECRET`.
+    - Note: env names differ from earlier design draft. Use `TELEGRAM_BOT_TOKEN` (not `BOT_TELEGRAM_TOKEN`), `GOOGLE_CLIENT_ID` (not `GOOGLE_OAUTH_CLIENT_ID`), `CORS_ORIGINS` (not `FRONTEND_ORIGIN`), and there is no `BAKONG_API_BASE` — only `BAKONG_API_TOKEN`. The Joi env validation schema in `backend/src/config/env.validation.ts` is the source of truth for required vars and bounds; the typed accessor lives in `backend/src/config/configuration.ts`.
+    - `.env`, `.env.local`, and `*.dump` are already in `.gitignore` for both folders.
     - _Requirements: design "Cross-Cutting Concerns → Security → Secrets"_
+
+  - [x] 1.4 Wire Claude Code auto-format hooks
+    - `.claude/settings.json` PostToolUse hooks scoped to each folder: prettier + eslint + tsc on backend `.ts` edits, prettier + eslint + tsc on frontend `.ts/.tsx/.js/.jsx/.css` edits.
+    - Frontend hook self-skips until `frontend/package.json` exists.
+    - tsc failures block the edit (exit 2); prettier/eslint warnings don't.
+    - _Requirements: none directly — developer ergonomics, complements R-lint discipline._
 
 - [ ] 2. Define Prisma schema and database migrations
   - [ ] 2.1 Switch Prisma datasource to PostgreSQL provider and configure `migrator` vs `app` DB roles
@@ -182,11 +194,11 @@ Convention for this file:
     - Routes: `POST /v1/auth/email/signup|login`, `/auth/telegram`, `/auth/google`, `/auth/logout`, `GET /auth/me`.
     - _Requirements: R1.1–R1.8_
 
-  - [ ]* 4.8 Property test: rate limiter window correctness
+  - [ ] 4.8 Property test: rate limiter window correctness
     - **Property: sliding window** — for any sequence of timestamps, the deny decision matches the spec (≥5 fails in last 15 min ⇒ deny).
     - **Validates: R1.7**
 
-  - [ ]* 4.9 Unit tests: argon2id round-trip and timing safety
+  - [ ] 4.9 Unit tests: argon2id round-trip and timing safety
     - _Requirements: R1.4, R1.6, R1.9_
 
 - [ ] 5. Implement Deal/Invite/Approval module
@@ -234,23 +246,23 @@ Convention for this file:
     - Emit `BOTH_APPROVED` exactly once (outbox).
     - _Requirements: R6.4, R6.5, R8.1–R8.7_
 
-  - [ ]* 5.10 Property test: `computeMissingFields` correctness
+  - [ ] 5.10 Property test: `computeMissingFields` correctness
     - **Property: missing-field characterisation** — for any synthetic deal, the returned array equals `{ f ∈ required | empty(f) }`.
     - **Validates: R6.1, R6.2**
 
-  - [ ]* 5.11 Property test: `computeTermsHash` canonicalisation
+  - [ ] 5.11 Property test: `computeTermsHash` canonicalisation
     - **Property: hash invariance under whitespace normalisation** — `hash(d) === hash(d')` when `d` and `d'` differ only by whitespace runs / amount precision; otherwise differ.
     - **Validates: R8.1**
 
-  - [ ]* 5.12 Property test: state machine `allowedTransitions`
+  - [ ] 5.12 Property test: state machine `allowedTransitions`
     - **Property: closure under spec** — for any `(prev, next)` pair, `transition` succeeds iff the spec table includes it; on reject, no row mutated.
     - **Validates: R6.5, R7.5, R20.1**
 
-  - [ ]* 5.13 Property test: `Approval.areBothApproved`
+  - [ ] 5.13 Property test: `Approval.areBothApproved`
     - **Property: both-approved iff matching active approvals** — true exactly when the latest non-invalidated approval per role has `terms_hash === deal.terms_hash`.
     - **Validates: R8.3, R8.4, R8.7**
 
-  - [ ]* 5.14 Unit tests: invite preview never leaks tokens or participant identities
+  - [ ] 5.14 Unit tests: invite preview never leaks tokens or participant identities
     - _Requirements: R4.2, R4.3_
 
   - [ ] 5.15 Checkpoint
@@ -283,16 +295,16 @@ Convention for this file:
     - `GET /v1/wallet/me`, `GET /v1/wallet/me/ledger?currency&cursor&limit` (cursor on `(created_at, id)`, max 200).
     - _Requirements: R14.1, R14.3, R15.6_
 
-  - [ ]* 6.7 Property test: `computeBalance` signed-sum invariant
+  - [ ] 6.7 Property test: `computeBalance` signed-sum invariant
     - **Property: balance equals signed sum** — for any random sequence of credit/debit entries, `computeBalance === Σ(direction === 'credit' ? amount : -amount)`.
     - **Validates: R14.3**
 
-  - [ ]* 6.8 Property test: atomicity (no orphan ledger rows)
+  - [ ] 6.8 Property test: atomicity (no orphan ledger rows)
     - Using Postgres testcontainer, inject failure between debit and credit; assert wallet rows unchanged after rollback.
     - **Property: all-or-nothing** — for any `payDealFromWallet` invocation that throws, `computeBalance` of buyer/escrow is unchanged.
     - **Validates: R9.8, R9.9, R14.4, R14.5**
 
-  - [ ]* 6.9 Unit tests: currency mismatch and insufficient balance error envelopes
+  - [ ] 6.9 Unit tests: currency mismatch and insufficient balance error envelopes
     - _Requirements: R9.3, R9.6_
 
 - [ ] 7. Implement Payment + KHQR module
@@ -329,12 +341,12 @@ Convention for this file:
     - `POST /v1/admin/payment-proofs/:id/reject`: 1–500 char reason; revert to `READY_FOR_PAYMENT`; emit `PAYMENT_REJECTED`.
     - _Requirements: R11.4, R11.5, R11.6, R11.7, R11.8, R20.3_
 
-  - [ ]* 7.8 Property test: `Reference_Note` format and uniqueness
+  - [ ] 7.8 Property test: `Reference_Note` format and uniqueness
     - **Property: format** — every generated note is 16 Crockford-base32 chars; rejection of `I/L/O/U`.
     - **Property: collision-free** — 100k generated notes have no duplicates.
     - **Validates: R10.1**
 
-  - [ ]* 7.9 Unit tests: KHQR receipt validation (size, MIME)
+  - [ ] 7.9 Unit tests: KHQR receipt validation (size, MIME)
     - _Requirements: R10.5, R10.6, R10.7_
 
 - [ ] 8. Implement Shipping, Confirmation, and Dispute modules
@@ -361,11 +373,11 @@ Convention for this file:
     - Single tx: credit buyer, write refund ledger entries, transition `DISPUTED → REFUNDED`, audit; emit `REFUND_COMPLETED`.
     - _Requirements: R17.8, R19.7, R20.3_
 
-  - [ ]* 8.6 Property test: confirm-received idempotency
+  - [ ] 8.6 Property test: confirm-received idempotency
     - **Property: idempotent confirm** — for any sequence of `(idempotency_key, ...)` calls, `RELEASE_PENDING` set exactly once and ledger rows generated exactly once.
     - **Validates: R13.2**
 
-  - [ ]* 8.7 Unit tests: dispute reason allow-list and message bounds
+  - [ ] 8.7 Unit tests: dispute reason allow-list and message bounds
     - _Requirements: R17.2, R17.4_
 
 - [ ] 9. Implement Withdrawal module + Admin review endpoints
@@ -393,11 +405,11 @@ Convention for this file:
     - Non-admin → `auth.admin_required`; never write audit for rejected attempt.
     - _Requirements: R16.6, R16.8_
 
-  - [ ]* 9.7 Property test: available-balance invariant under concurrent withdrawals
+  - [ ] 9.7 Property test: available-balance invariant under concurrent withdrawals
     - **Property: no over-withdrawal** — for any sequence of approve/reject and create-withdrawal operations, `available_balance ≥ 0` at every step; sum of pending holds never exceeds wallet balance.
     - **Validates: R15.6, R15.8, R16.2, R16.3**
 
-  - [ ]* 9.8 Unit tests: KHQR vs bank destination field validation
+  - [ ] 9.8 Unit tests: KHQR vs bank destination field validation
     - _Requirements: R15.3, R15.4, R15.5, R15.7_
 
 - [ ] 10. Implement Notification module with outbox pattern
@@ -425,11 +437,11 @@ Convention for this file:
     - Structured `pino` log with `event_type`, `recipient_kind`, `recipient_id`, `deal_id|withdrawal_id`, `last_error`.
     - _Requirements: R19.10, R19.11_
 
-  - [ ]* 10.7 Property test: outbox at-least-once delivery
+  - [ ] 10.7 Property test: outbox at-least-once delivery
     - **Property: at-least-once** — every `enqueue` that commits eventually transitions to `sent` or hits the retry cap as `failed`; no row stays `pending` forever.
     - **Validates: R19.10, R19.11**
 
-  - [ ]* 10.8 Unit tests: exponential backoff schedule
+  - [ ] 10.8 Unit tests: exponential backoff schedule
     - _Requirements: R19.10_
 
 - [ ] 11. Implement Storage module on MinIO
@@ -447,13 +459,13 @@ Convention for this file:
     - On violation: `storage.invalid_file`.
     - _Requirements: R10.6, R10.7, R12.4, R15.3_
 
-  - [ ]* 11.4 Unit tests: MIME sniff + size cap
+  - [ ] 11.4 Unit tests: MIME sniff + size cap
     - _Requirements: R10.7, R12.4_
 
 - [ ] 12. Implement Telegram bot module
   - [ ] 12.1 Bot bootstrap (`telegraf` or `node-telegram-bot-api`)
     - Long-poll in dev; webhook in prod via `POST /v1/telegram/webhook` behind Nginx.
-    - Read `BOT_TELEGRAM_TOKEN`; redact in pino logs.
+    - Read `TELEGRAM_BOT_TOKEN`; redact in pino logs.
     - _Requirements: R18.8_
 
   - [ ] 12.2 `BotConversationService` (Postgres-backed FSM)
@@ -485,11 +497,11 @@ Convention for this file:
   - [ ] 12.8 Wire `TelegramAdapter` to bot for inbound notifications
     - _Requirements: R18.9, R19.1–R19.9_
 
-  - [ ]* 12.9 Property test: conversation FSM transitions
+  - [ ] 12.9 Property test: conversation FSM transitions
     - **Property: FSM closure** — for any input sequence, the FSM only ever reaches states defined in design's bot diagram; `/cancel` from any non-terminal state ends the conversation.
     - **Validates: R18.2–R18.6, R18.12, R18.13**
 
-  - [ ]* 12.10 Unit test: bot token never appears in logs or user messages
+  - [ ] 12.10 Unit test: bot token never appears in logs or user messages
     - _Requirements: R18.8_
 
 - [ ] 13. Build frontend pages and components
@@ -552,67 +564,67 @@ Convention for this file:
     - Raw access tokens shown exactly once; never logged to `console.log`; never exposed to buyer view of seller payout KHQR.
     - _Requirements: R2.9, R5.8, AGENTS.md "Frontend Coding Rules"_
 
-  - [ ]* 13.15 Component unit tests for `MissingFieldsChecklist`, `KhqrPaymentPanel`, `WithdrawalForm`
+  - [ ] 13.15 Component unit tests for `MissingFieldsChecklist`, `KhqrPaymentPanel`, `WithdrawalForm`
     - _Requirements: R6.2, R10.2, R15.3, R15.4_
 
 - [ ] 14. Cross-cutting property and integration test pass
-  - [ ]* 14.1 Property test: deal state machine end-to-end invariants
+  - [ ] 14.1 Property test: deal state machine end-to-end invariants
     - **Property: monotonic terminal states** — once `RELEASED`/`REFUNDED`/`CANCELLED`/`EXPIRED`, no further transition succeeds.
     - **Property: tx atomicity per transition** — each `transition` either commits both the status change and the audit row or commits neither.
     - **Validates: R20.1, R20.4, design state diagram**
 
-  - [ ]* 14.2 Property test: total wallet conservation across auto-release
+  - [ ] 14.2 Property test: total wallet conservation across auto-release
     - **Property: zero-sum** — `Δ(escrow) + Δ(seller) === 0` over `RELEASE_PENDING → RELEASED`.
     - **Validates: R13.3, R14.4**
 
-  - [ ]* 14.3 Property test: withdrawal hold ↔ rejection compensation
+  - [ ] 14.3 Property test: withdrawal hold ↔ rejection compensation
     - **Property: rejection cancels hold** — after `reject`, `available_balance` returns to value at the moment before the corresponding `create`.
     - **Validates: R15.8, R16.3**
 
-  - [ ]* 14.4 Property test: idempotency middleware
+  - [ ] 14.4 Property test: idempotency middleware
     - **Property: at-most-once side effect** — for any `(scope, key, user_id)`, repeated calls produce identical responses and exactly one persisted side effect.
     - **Validates: R13.2, R16.2, R16.3, R18.11**
 
-  - [ ]* 14.5 Integration test suite via Postgres + MinIO testcontainers
+  - [ ] 14.5 Integration test suite via Postgres + MinIO testcontainers
     - End-to-end: signup → create deal → join → approve → pay (wallet) → ship → confirm → release; assert audit and ledger rows.
     - End-to-end: KHQR path with mocked Bakong.
     - End-to-end: withdrawal request → admin approve.
     - End-to-end: dispute → admin refund.
     - _Requirements: R1–R20 (smoke coverage)_
 
-  - [ ] 14.6 Checkpoint
+  - [~] 14.6 Checkpoint
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 15. Deployment finalization
-  - [ ] 15.1 Production `Dockerfile` for backend (multi-stage)
+  - [~] 15.1 Production `Dockerfile` for backend (multi-stage)
     - Builder runs `prisma generate` + `npm run build`; runner uses non-root user.
     - _Requirements: design "Deployment Topology"_
 
-  - [ ] 15.2 Production `Dockerfile` for frontend (Next.js standalone output)
+  - [~] 15.2 Production `Dockerfile` for frontend (Next.js standalone output)
     - `next.config.ts` `output: 'standalone'`; copy `.next/standalone` + `static` + `public`.
     - _Requirements: design "Deployment Topology"_
 
-  - [ ] 15.3 Backend health endpoint `GET /v1/health`
+  - [~] 15.3 Backend health endpoint `GET /v1/health`
     - Returns `{ db: 'ok'|'fail', minio: 'ok'|'fail' }`; used by Docker healthcheck.
     - _Requirements: design "Observability → Healthchecks"_
 
-  - [ ] 15.4 One-shot `migrator` service in `docker-compose.yml`
+  - [~] 15.4 One-shot `migrator` service in `docker-compose.yml`
     - Runs `prisma migrate deploy` then exits; uses `migrator` Postgres role with DDL privileges.
     - _Requirements: design "Append-only enforcement"_
 
-  - [ ] 15.5 Postgres backup script
+  - [~] 15.5 Postgres backup script
     - Host cron entry; `pg_dump -Fc` nightly to `/var/bothsafe/backups/postgres/$(date +%F).dump`; 14-day retention.
     - _Requirements: design "Backups"_
 
-  - [ ] 15.6 TLS via Let's Encrypt
+  - [~] 15.6 TLS via Let's Encrypt
     - Certbot via webroot; renewal cron with deploy hook `docker compose exec nginx nginx -s reload`.
     - _Requirements: design "TLS"_
 
-  - [ ] 15.7 Pino logger redaction config
-    - Redact `password`, `password_hash`, `token`, `raw_*_token`, `Authorization`, `Cookie`, `BOT_TELEGRAM_TOKEN`, `*_secret`.
+  - [~] 15.7 Pino logger redaction config
+    - Redact `password`, `password_hash`, `token`, `raw_*_token`, `Authorization`, `Cookie`, `TELEGRAM_BOT_TOKEN`, `*_secret`.
     - _Requirements: R1.9, R18.8, design "Cross-Cutting → Security → Logging"_
 
-  - [ ] 15.8 Final checkpoint
+  - [~] 15.8 Final checkpoint
     - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

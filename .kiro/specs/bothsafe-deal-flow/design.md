@@ -20,8 +20,10 @@ The design preserves the canonical Deal Status state machine and module map esta
 | Backend | NestJS (TypeScript), Prisma ORM, `/v1` API prefix | Telegram bot module runs in-process. |
 | Database | **PostgreSQL** (Prisma `postgresql` provider) | Overrides `AGENTS.md`'s MySQL choice for this feature. Uses `NUMERIC(18,2)`, `TIMESTAMPTZ`, native `ENUM`, `JSONB`. |
 | Object storage | **MinIO** (self-hosted) | Replaces external S3. Same Docker stack. |
-| Reverse proxy | **Nginx** | Single container, terminates TLS, fronts frontend + backend + MinIO. |
-| Deployment | Single VPS, Docker Compose | Five services: `nginx`, `frontend`, `backend`, `postgres`, `minio`. Only Nginx exposes 80/443. |
+| Cache / sessions | **Redis 7** | Used for rate-limit counters, idempotency keys, and the notification outbox claim lock. Optional in dev — backend falls back to in-memory state if `REDIS_URL` is unset. |
+| Reverse proxy | **Nginx** | Production only. Single container, terminates TLS, fronts frontend + backend + MinIO. |
+| Deployment (dev) | `docker-compose.yml` at repo root | Data services only: `bothsafe-dev-postgres` (host `:55432`), `bothsafe-dev-minio` (`:59000`/`:59001`), `bothsafe-dev-redis` (`:56379`). Backend (`npm run start:dev`, host `:3003`) and frontend (`npm run dev`, host `:3000`) run on the host for fast iteration. Ports are shifted to coexist with other services on a developer's machine. |
+| Deployment (prod) | `docker-compose.prod.yml` on a single VPS | Six services: `nginx`, `frontend`, `backend`, `bothsafe-postgres`, `bothsafe-minio`, `bothsafe-redis`. Only Nginx exposes 80/443. Backend and frontend ship as multi-stage Docker images (`backend/Dockerfile`, `frontend/Dockerfile`). |
 
 ### Source-of-truth alignment
 
@@ -40,18 +42,21 @@ Where this feature changes the MVP behaviour (KHQR auto-verify, wallet payment, 
 
 ### System context (Docker Compose container diagram)
 
+The diagram shows the **production** topology. In development, only `postgres`, `minio`, and `redis` run in Docker — `frontend` and `backend` run on the host (`npm run dev` / `npm run start:dev`) and there is no `nginx` container; the frontend talks to the backend directly at `http://localhost:3003`.
+
 ```mermaid
 flowchart LR
   user([Buyer / Seller])
   admin([Admin])
   tg([Telegram User])
 
-  subgraph VPS["VPS — Docker Compose"]
+  subgraph VPS["VPS — Docker Compose (prod)"]
     nginx["nginx<br/>:80, :443"]
     frontend["frontend<br/>Next.js :3000"]
-    backend["backend<br/>NestJS :3001<br/>+ bot module"]
-    postgres[("postgres<br/>:5432<br/>volume: postgres-data")]
-    minio[("minio<br/>:9000 / :9001<br/>volume: minio-data")]
+    backend["backend<br/>NestJS :3003<br/>+ bot module"]
+    postgres[("bothsafe-postgres<br/>:5432<br/>volume: bothsafe-postgres-data")]
+    minio[("bothsafe-minio<br/>:9000 / :9001<br/>volume: bothsafe-minio-data")]
+    redis[("bothsafe-redis<br/>:6379<br/>volume: bothsafe-redis-data")]
   end
 
   bakong[/Bakong KHQR API/]
@@ -65,16 +70,17 @@ flowchart LR
 
   nginx -->|/| frontend
   nginx -->|/v1/*| backend
-  nginx -->|s3.* or /minio| minio
+  nginx -->|s3.*| minio
 
   frontend -->|server-side fetch| backend
   backend --> postgres
   backend --> minio
+  backend --> redis
   backend --> bakong
   backend --> google
 ```
 
-Only Nginx is bound to host ports 80/443. All service-to-service traffic stays on the internal Docker network.
+Only Nginx is bound to host ports 80/443. All service-to-service traffic stays on the internal Docker network (`bothsafe-net`).
 
 ### Module decomposition
 
@@ -1233,7 +1239,7 @@ The Telegram adapter inside `NotificationDispatcher` reads outbox rows where `re
 - A short event-specific localised body.
 - An inline keyboard with a single `Open Deal Room` button linking to `https://bothsafe.app/d/{publicId}`.
 
-The bot token is read from `BOT_TELEGRAM_TOKEN` env. It is never logged, never echoed back to a user, and never appears in any audit row.
+The bot token is read from `TELEGRAM_BOT_TOKEN` env. It is never logged, never echoed back to a user, and never appears in any audit row.
 
 ---
 
@@ -1244,10 +1250,10 @@ The bot token is read from `BOT_TELEGRAM_TOKEN` env. It is never logged, never e
 - **Token hashing.** All access tokens (creator, participant, invite, session) stored as SHA-256. Raw tokens returned exactly once.
 - **Password hashing.** `argon2id` (parameters above). No plaintext password ever logged or stored.
 - **Append-only ledger and audit.** DB-level: revoked UPDATE/DELETE on `wallet_ledger_entry` and `audit_log_entry` for the app role, plus mutation-rejecting triggers as defence in depth.
-- **CORS.** NestJS `enableCors({ origin: process.env.FRONTEND_ORIGIN, credentials: true })`. Wildcard origins are forbidden in production.
+- **CORS.** NestJS `enableCors({ origin: corsOrigins.length > 0 ? corsOrigins : (nodeEnv === 'development'), credentials: true })` where `corsOrigins` is parsed from the comma-separated `CORS_ORIGINS` env. Wildcard origins are forbidden in production (empty `CORS_ORIGINS` in prod blocks all origins; empty in dev allows all). The runtime wiring lives in `backend/src/main.ts`.
 - **Rate limiting.** Two layers — NestJS `@Throttle` and Nginx `limit_req_zone`.
 - **Secrets.** Provided via `.env` mounted into the backend container. `.env` is in `.gitignore`. Bot token, Postgres password, MinIO root password, JWT signing key for admin sessions all live there.
-- **Logging.** Structured JSON via `pino`. A redaction list strips `password`, `password_hash`, `token`, `raw_*_token`, `Authorization`, `Cookie`, `BOT_TELEGRAM_TOKEN`, and any field matching `*_secret`.
+- **Logging.** Structured JSON via `pino`. A redaction list strips `password`, `password_hash`, `token`, `raw_*_token`, `Authorization`, `Cookie`, `TELEGRAM_BOT_TOKEN`, and any field matching `*_secret`.
 
 ### Observability
 
@@ -1283,7 +1289,56 @@ For atomicity properties (no orphan ledger rows after rollback) we use Postgres 
 
 ## Deployment Topology
 
-### `docker-compose.yml` outline
+The repo ships **two** compose files. They are intentionally separate so dev iteration stays fast and prod stays minimal:
+
+- `docker-compose.yml` — dev data services only (postgres, minio, redis). Container names prefixed `bothsafe-dev-` and host ports shifted (`55432`, `59000`/`59001`, `56379`) so they coexist with anything else already running on the developer's machine. Backend and frontend run on the host.
+- `docker-compose.prod.yml` — full prod stack on a single VPS: `nginx`, `frontend`, `backend`, `bothsafe-postgres`, `bothsafe-minio`, `bothsafe-redis`. All required secrets use `${VAR:?msg}` so `compose up` fails loudly when an operator forgets to populate `.env`.
+
+The committed dev `docker-compose.yml` is the source of truth; the snippet below is a structural sketch only.
+
+### Dev `docker-compose.yml` (data services only)
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bothsafe-dev-postgres
+    environment: { POSTGRES_USER: bothsafe, POSTGRES_PASSWORD: bothsafe, POSTGRES_DB: bothsafe }
+    ports: ["55432:5432"]
+    volumes: [bothsafe-dev-postgres-data:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U bothsafe -d bothsafe"], interval: 5s }
+
+  minio:
+    image: minio/minio:latest
+    container_name: bothsafe-dev-minio
+    command: server /data --console-address ":9001"
+    environment: { MINIO_ROOT_USER: minioadmin, MINIO_ROOT_PASSWORD: minioadmin }
+    ports: ["59000:9000", "59001:9001"]
+    volumes: [bothsafe-dev-minio-data:/data]
+    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"] }
+
+  minio-init:
+    # one-shot job: creates the `bothsafe` bucket on first boot, idempotent
+    image: minio/mc:latest
+    depends_on: { minio: { condition: service_healthy } }
+
+  redis:
+    image: redis:7-alpine
+    container_name: bothsafe-dev-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["56379:6379"]
+    volumes: [bothsafe-dev-redis-data:/data]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s }
+
+volumes:
+  bothsafe-dev-postgres-data:
+  bothsafe-dev-minio-data:
+  bothsafe-dev-redis-data:
+```
+
+Helper script: `./scripts/dev-up.sh {up|down|nuke|logs}`.
+
+### Prod `docker-compose.prod.yml` outline
 
 ```yaml
 services:
@@ -1292,140 +1347,163 @@ services:
     ports: ["80:80", "443:443"]
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - letsencrypt:/etc/letsencrypt
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - bothsafe-certbot-webroot:/var/www/certbot
     depends_on: [frontend, backend, minio]
-    restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:?required}
+        NEXT_PUBLIC_APP_BASE_URL: ${NEXT_PUBLIC_APP_BASE_URL:?required}
+    container_name: bothsafe-frontend
     environment:
-      - NEXT_PUBLIC_API_BASE=https://bothsafe.app/v1
-      - NODE_ENV=production
-    expose: ["3000"]
-    depends_on: [backend]
-    restart: unless-stopped
+      NODE_ENV: production
+      INTERNAL_API_BASE: http://backend:3003
 
   backend:
     build: ./backend
+    container_name: bothsafe-backend
     environment:
-      - DATABASE_URL=postgres://app:${POSTGRES_PASSWORD}@postgres:5432/bothsafe
-      - MINIO_ENDPOINT=http://minio:9000
-      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER}
-      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD}
-      - MINIO_BUCKET=bothsafe
-      - FRONTEND_ORIGIN=https://bothsafe.app
-      - BOT_TELEGRAM_TOKEN=${BOT_TELEGRAM_TOKEN}
-      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}
-      - SESSION_SECRET=${SESSION_SECRET}
-      - BAKONG_API_BASE=${BAKONG_API_BASE}
-      - BAKONG_API_TOKEN=${BAKONG_API_TOKEN}
-    expose: ["3001"]
+      NODE_ENV: production
+      PORT: 3003
+      DATABASE_URL: postgresql://bothsafe:${POSTGRES_PASSWORD}@postgres:5432/bothsafe?schema=public
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: bothsafe
+      JWT_SECRET: ${JWT_SECRET:?required}
+      SESSION_SECRET: ${SESSION_SECRET:?required}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?required}
+      APP_BASE_URL: ${APP_BASE_URL}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_BOT_ENABLED: ${TELEGRAM_BOT_ENABLED:-true}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      BAKONG_ACCOUNT_ID: ${BAKONG_ACCOUNT_ID}
+      BAKONG_API_TOKEN: ${BAKONG_API_TOKEN}
+      ADMIN_BOOTSTRAP_EMAIL: ${ADMIN_BOOTSTRAP_EMAIL:?required}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:?required}
     depends_on:
       postgres: { condition: service_healthy }
       minio:    { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3001/v1/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
+      redis:    { condition: service_healthy }
 
   postgres:
     image: postgres:16-alpine
+    container_name: bothsafe-postgres
     environment:
-      - POSTGRES_DB=bothsafe
-      - POSTGRES_USER=app
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./ops/backups:/backups
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d bothsafe"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
+      POSTGRES_USER: bothsafe
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_DB: bothsafe
+    volumes: [bothsafe-postgres-data:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U bothsafe -d bothsafe"] }
 
   minio:
     image: minio/minio:latest
+    container_name: bothsafe-minio
     command: server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-    volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?required}
+    volumes: [bothsafe-minio-data:/data]
+    healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"] }
+
+  redis:
+    image: redis:7-alpine
+    container_name: bothsafe-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [bothsafe-redis-data:/data]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"] }
 
 volumes:
-  postgres-data:
-  minio-data:
-  letsencrypt:
+  bothsafe-postgres-data:
+  bothsafe-minio-data:
+  bothsafe-redis-data:
+  bothsafe-certbot-webroot:
+
+networks:
+  bothsafe-net: { driver: bridge }
 ```
 
 Notes:
 
-- Only `nginx` exposes host ports (`80`, `443`). All other services use `expose:` so they are reachable only on the internal Docker network.
-- Backend depends on healthy `postgres` and `minio` so it does not start until both are accepting connections.
+- Only `nginx` exposes host ports (`80`, `443`). All other services use the internal `bothsafe-net` network.
+- Backend depends on healthy `postgres`, `minio`, and `redis` so it does not start until all three are accepting connections.
+- The Postgres user is `bothsafe` (not `app`) — this matches the dev compose so connection strings differ only by host/port between dev and prod.
 - A separate `migrator` one-shot service can be added for `prisma migrate deploy` runs.
 
-### Nginx config sketch
+### Nginx config sketch (production)
+
+The committed `nginx/nginx.conf` is the source of truth. Key behaviour:
 
 ```
 http {
-  limit_req_zone $binary_remote_addr zone=auth:10m rate=60r/m;
+  client_max_body_size 12m;        # covers 10 MB attachments + headroom
+
+  limit_req_zone $binary_remote_addr zone=auth:10m   rate=60r/m;
   limit_req_zone $binary_remote_addr zone=invite:10m rate=120r/m;
 
-  upstream frontend_up { server frontend:3000; }
-  upstream backend_up  { server backend:3001;  }
-  upstream minio_up    { server minio:9000;    }
+  upstream frontend_upstream { server frontend:3000; keepalive 32; }
+  upstream backend_upstream  { server backend:3003;  keepalive 32; }
+  upstream minio_upstream    { server minio:9000;    keepalive 32; }
 
-  server {
-    listen 80;
-    server_name bothsafe.app s3.bothsafe.app;
-    return 301 https://$host$request_uri;
+  # Propagate or generate X-Request-Id end-to-end.
+  map $http_x_request_id $req_id {
+    default $http_x_request_id;
+    ""      $request_id;
   }
 
+  # Port 80: ACME challenge + redirect to HTTPS
   server {
-    listen 443 ssl http2;
-    server_name bothsafe.app;
-    ssl_certificate     /etc/letsencrypt/live/bothsafe.app/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/bothsafe.app/privkey.pem;
+    listen 80 default_server;
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://$host$request_uri; }
+  }
 
-    client_max_body_size 12m;     # covers 10 MB attachments + headroom
+  # Main HTTPS host
+  server {
+    listen 443 ssl;
+    http2 on;
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
 
-    location /v1/auth/ {
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    location ~ ^/v1/auth/(login|signup|telegram|google) {
       limit_req zone=auth burst=20 nodelay;
-      proxy_pass http://backend_up;
-      proxy_set_header X-Request-Id $request_id;
+      proxy_pass http://backend_upstream;
+      proxy_set_header X-Request-Id $req_id;
     }
     location ~ ^/v1/deals/[^/]+/invite-preview$ {
       limit_req zone=invite burst=40 nodelay;
-      proxy_pass http://backend_up;
+      proxy_pass http://backend_upstream;
     }
     location /v1/ {
-      proxy_pass http://backend_up;
-      proxy_set_header X-Request-Id $request_id;
+      proxy_pass http://backend_upstream;
+      proxy_set_header X-Request-Id $req_id;
     }
     location / {
-      proxy_pass http://frontend_up;
+      proxy_pass http://frontend_upstream;
     }
   }
 
+  # MinIO subdomain — issued signed URLs use this hostname
   server {
-    listen 443 ssl http2;
-    server_name s3.bothsafe.app;
-    ssl_certificate     /etc/letsencrypt/live/bothsafe.app/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/bothsafe.app/privkey.pem;
+    listen 443 ssl;
+    server_name s3.*;
+    client_max_body_size 200m;
     location / {
-      proxy_pass http://minio_up;
-      proxy_set_header Host $host;
-      proxy_set_header X-Real-IP $remote_addr;
+      proxy_pass http://minio_upstream;
+      proxy_buffering off;
+      proxy_request_buffering off;
     }
   }
 }
@@ -1439,6 +1517,7 @@ http {
 
 ### TLS
 
-- Certificates issued by Let's Encrypt via `certbot certonly --webroot` with the webroot mounted into Nginx.
+- Production Nginx expects PEM files at `/etc/nginx/certs/fullchain.pem` and `/etc/nginx/certs/privkey.pem` (mounted read-only via the `./nginx/certs` host directory).
+- Issue with Let's Encrypt via `certbot certonly --webroot -w /var/www/certbot` (the prod compose mounts the `bothsafe-certbot-webroot` volume at `/var/www/certbot` for the ACME HTTP-01 challenge). After issuance, copy or symlink the live certs into `./nginx/certs/`.
 - Renewal is a host cron (`0 3 * * *`) that runs `certbot renew --deploy-hook "docker compose exec nginx nginx -s reload"`.
 

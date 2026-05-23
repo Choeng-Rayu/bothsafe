@@ -3,5 +3,29 @@
     "frontend-design@claude-plugins-official": true,
     "superpowers@claude-plugins-official": true,
     "context7@claude-plugins-official": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const i=JSON.parse(d);const f=i.tool_input&&i.tool_input.file_path;if(!f)process.exit(0);if(!/\\.tsx?$/.test(f))process.exit(0);if(!f.includes('/backend/'))process.exit(0);const cp=require('child_process');try{cp.execSync('npx --no-install prettier --write ' + JSON.stringify(f),{cwd:'/home/rayu/bothsafe/backend',stdio:'pipe'})}catch(e){}try{cp.execSync('npx --no-install eslint --fix ' + JSON.stringify(f),{cwd:'/home/rayu/bothsafe/backend',stdio:'pipe'})}catch(e){}try{cp.execSync('timeout 60 npx --no-install tsc --noEmit --pretty false --incremental --tsBuildInfoFile node_modules/.cache/tsc-hook.tsbuildinfo',{cwd:'/home/rayu/bothsafe/backend',stdio:'pipe'})}catch(e){if(e.stdout)process.stderr.write(e.stdout);if(e.stderr)process.stderr.write(e.stderr);process.exit(2)}})\"",
+            "description": "Backend: prettier + eslint + tsc on .ts edits"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const i=JSON.parse(d);const f=i.tool_input&&i.tool_input.file_path;if(!f)process.exit(0);if(!/\\.(tsx?|jsx?|css)$/.test(f))process.exit(0);if(!f.includes('/frontend/'))process.exit(0);const fs=require('fs');if(!fs.existsSync('/home/rayu/bothsafe/frontend/package.json'))process.exit(0);const cp=require('child_process');try{cp.execSync('npx --no-install prettier --write ' + JSON.stringify(f),{cwd:'/home/rayu/bothsafe/frontend',stdio:'pipe'})}catch(e){}try{cp.execSync('npx --no-install eslint --fix ' + JSON.stringify(f),{cwd:'/home/rayu/bothsafe/frontend',stdio:'pipe'})}catch(e){}if(/\\.tsx?$/.test(f)){try{cp.execSync('timeout 60 npx --no-install tsc --noEmit --pretty false --incremental --tsBuildInfoFile node_modules/.cache/tsc-hook.tsbuildinfo',{cwd:'/home/rayu/bothsafe/frontend',stdio:'pipe'})}catch(e){if(e.stdout)process.stderr.write(e.stdout);if(e.stderr)process.stderr.write(e.stderr);process.exit(2)}}})\"",
+            "description": "Frontend: prettier + eslint + tsc on .ts/.tsx/.js/.jsx/.css edits (no-op until package.json exists)"
+          }
+        ]
+      }
+    ]
   }
 }

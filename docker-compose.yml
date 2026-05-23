@@ -1,0 +1,90 @@
+# BothSafe local development stack.
+#
+# Runs ONLY the data services in Docker. The backend (NestJS) and the
+# frontend (Next.js) run on the host with `npm run start:dev` / `npm run dev`
+# so hot reload and debugging stay fast.
+#
+# For production (everything containerized including nginx, frontend, backend)
+# see docker-compose.prod.yml.
+#
+# Usage:
+#   docker compose up -d
+#   docker compose ps
+#   docker compose down               # stop, keep data
+#   docker compose down -v            # stop + WIPE volumes (destructive)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bothsafe-dev-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bothsafe
+      POSTGRES_PASSWORD: bothsafe
+      POSTGRES_DB: bothsafe
+    ports:
+      - "55432:5432"
+    volumes:
+      - bothsafe-dev-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bothsafe -d bothsafe"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  minio:
+    image: minio/minio:latest
+    container_name: bothsafe-dev-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "59000:9000"   # S3 API
+      - "59001:9001"   # web console
+    volumes:
+      - bothsafe-dev-minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # One-shot job that creates the bucket on first boot.
+  # Idempotent: re-running does nothing if the bucket already exists.
+  minio-init:
+    image: minio/mc:latest
+    container_name: bothsafe-dev-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb -p local/bothsafe || true &&
+      mc anonymous set download local/bothsafe || true &&
+      echo 'minio bucket bothsafe ready'
+      "
+
+  redis:
+    image: redis:7-alpine
+    container_name: bothsafe-dev-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "56379:6379"
+    volumes:
+      - bothsafe-dev-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  bothsafe-dev-postgres-data:
+  bothsafe-dev-minio-data:
+  bothsafe-dev-redis-data:
