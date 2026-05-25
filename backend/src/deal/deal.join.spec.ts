@@ -229,12 +229,23 @@ function buildController(opts: BuildControllerOptions = {}) {
     recordApproval: jest.fn(),
   } as unknown as ApprovalService;
 
+  // task 5.6 sibling — `DealSectionPatchService` is injected last; the
+  // join flow never invokes it, so a bare stub satisfies the
+  // constructor signature.
+  const sectionPatchService = {
+    patchProduct: jest.fn(),
+    patchParticipant: jest.fn(),
+    patchDelivery: jest.fn(),
+    patchPayout: jest.fn(),
+  } as unknown as import('./deal-section-patch.service').DealSectionPatchService;
+
   const controller = new DealController(
     dealService,
     approvalService,
     prisma,
     inviteService,
     auditService,
+    sectionPatchService,
   );
 
   return {

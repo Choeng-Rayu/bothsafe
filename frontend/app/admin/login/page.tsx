@@ -1,0 +1,55 @@
+"use client";
+import { useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+export default function AdminLoginPage() {
+  const t = useTranslations();
+  const router = useRouter();
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    const fd = new FormData(e.currentTarget);
+    try {
+      const res = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: fd.get("email"), password: fd.get("password") }),
+      });
+      if (!res.ok) {
+        setError(t("errors.auth.invalid_credentials"));
+        return;
+      }
+      router.push("/admin/deals");
+      router.refresh();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="flex flex-1 items-center justify-center px-4 py-12">
+      <div className="w-full max-w-sm">
+        <h1 className="text-2xl font-bold mb-6">Admin Login</h1>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <label>
+            <span className="text-sm font-medium">{t("auth.email_label")}</span>
+            <input name="email" type="email" required className="input-field mt-1" />
+          </label>
+          <label>
+            <span className="text-sm font-medium">{t("auth.password_label")}</span>
+            <input name="password" type="password" required className="input-field mt-1" />
+          </label>
+          {error && <p className="text-red-600 text-sm">{error}</p>}
+          <button type="submit" disabled={loading} className="btn-primary">
+            {loading ? t("common.loading") : t("auth.login_cta")}
+          </button>
+        </form>
+      </div>
+    </main>
+  );
+}

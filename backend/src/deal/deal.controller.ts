@@ -54,6 +54,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -70,9 +71,14 @@ import { DomainException } from '../common/errors';
 import { generateRawToken, hashToken } from '../common/tokens';
 import { PrismaService } from '../prisma';
 import { ApprovalService } from './approval.service';
+import { DealSectionPatchService } from './deal-section-patch.service';
 import { computeMissingFields } from './deal.missing-fields';
 import { DealService } from './deal.service';
 import { JoinDealDto } from './dto/join-deal.dto';
+import { PatchDeliveryDto } from './dto/patch-delivery.dto';
+import { PatchParticipantDto } from './dto/patch-participant.dto';
+import { PatchPayoutDto } from './dto/patch-payout.dto';
+import { PatchProductDto } from './dto/patch-product.dto';
 import { InviteService, type InviteRole } from './invite.service';
 
 /**
@@ -137,6 +143,14 @@ export class DealController {
     //     row (R20.1, R20.4).
     private readonly inviteService: InviteService,
     private readonly auditService: AuditService,
+    // task 5.6 — `DealSectionPatchService` owns the four section-patch
+    // routes (R7.1–R7.7). The controller is a thin HTTP wrapper: it
+    // applies `AuthGuard` + global `ValidationPipe` (declared in
+    // `main.ts`), forwards the DTO + `currentUser`, then projects the
+    // service result onto the standard wire envelope via
+    // `buildDealRoomResponse` so the four patch routes return the same
+    // shape as `/join` and `/approval`.
+    private readonly sectionPatchService: DealSectionPatchService,
   ) {}
 
   // task 5.8
@@ -491,6 +505,191 @@ export class DealController {
         'messages.deal.approved',
       );
     });
+  }
+
+  // task 5.6 — section-patch routes
+  // ---------------------------------------------------------------------
+  // The four `/sections/:section` PATCH routes are thin HTTP wrappers
+  // around `DealSectionPatchService`. The service owns:
+  //
+  //   - locking edits after payment (R7.5 → `deal.locked_after_payment`),
+  //   - participant ownership / role checks (R7.2, R7.6 →
+  //     `auth.role_forbidden`),
+  //   - material-edit detection + approval invalidation + revert to
+  //     `AWAITING_BOTH_APPROVAL` (R7.3, R8.4),
+  //   - non-material preservation of approvals + status (R7.4),
+  //   - field-bound validation in cooperation with the global
+  //     `ValidationPipe` configured in `main.ts` (R7.7 →
+  //     `deal.invalid_field`),
+  //   - `terms_hash` refresh (R8.1).
+  //
+  // The controller's only job is to authenticate, validate the DTO,
+  // forward the call, and project the service's `DealRoomApiResponse`
+  // onto the standard `DealRoomResponse` wire shape so the four patch
+  // routes return the same envelope as `/join` and `/approval`.
+
+  /**
+   * `PATCH /v1/deals/:publicId/sections/product`
+   *
+   * Edit any subset of the product section fields (R7.1):
+   * `product_title`, `product_type`, `product_description`,
+   * `quantity`, `condition`, `deal_amount`, `currency`.
+   *
+   * Behaviour:
+   *   - Material edits to `product_title` / `product_description` /
+   *     `deal_amount` / `currency` invalidate prior approvals and
+   *     revert `Deal_Status` to `AWAITING_BOTH_APPROVAL` (R7.3).
+   *   - Non-material edits (`product_type`, `quantity`, `condition`)
+   *     preserve approvals + status (R7.4).
+   *
+   * Errors:
+   *   - 404 `deal.not_found`            — `public_id` does not match.
+   *   - 403 `auth.role_forbidden`       — caller is not a participant (R7.6).
+   *   - 400 `deal.locked_after_payment` — status is past `READY_FOR_PAYMENT` (R7.5).
+   *   - 400 `deal.invalid_field`        — out-of-bound value (R7.7).
+   *
+   * Requirements: R7.1, R7.3, R7.4, R7.5, R7.7.
+   */
+  @UseGuards(AuthGuard)
+  @Patch(':publicId/sections/product')
+  @HttpCode(HttpStatus.OK)
+  async patchProduct(
+    @Param('publicId') publicId: string,
+    @Body() dto: PatchProductDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<DealRoomResponse> {
+    const result = await this.sectionPatchService.patchProduct(
+      publicId,
+      dto,
+      currentUser,
+    );
+    return buildDealRoomResponse(
+      result.deal,
+      result.missing_fields,
+      result.allowed_actions,
+    );
+  }
+
+  /**
+   * `PATCH /v1/deals/:publicId/sections/participant`
+   *
+   * Edit the participant-owned personal fields linked to the caller's
+   * own `User` id (R7.2):
+   *
+   *   - `buyer_name` / `buyer_phone` — only when the caller is the buyer.
+   *   - `seller_name` / `seller_phone` — only when the caller is the seller.
+   *   - `preferred_lang` — caller's own row.
+   *
+   * Attempts to set the other side's name / phone are rejected with
+   * `auth.role_forbidden` (R7.6).
+   *
+   * All participant fields are non-material — approvals and status are
+   * preserved (R7.4).
+   *
+   * Errors:
+   *   - 404 `deal.not_found`            — `public_id` does not match.
+   *   - 403 `auth.role_forbidden`       — non-participant or wrong-role
+   *                                       attempt to set the other
+   *                                       side's identity (R7.6).
+   *   - 400 `deal.locked_after_payment` — status is past `READY_FOR_PAYMENT` (R7.5).
+   *   - 400 `deal.invalid_field`        — out-of-bound value (R7.7).
+   *
+   * Requirements: R7.2, R7.4, R7.5, R7.6, R7.7.
+   */
+  @UseGuards(AuthGuard)
+  @Patch(':publicId/sections/participant')
+  @HttpCode(HttpStatus.OK)
+  async patchParticipant(
+    @Param('publicId') publicId: string,
+    @Body() dto: PatchParticipantDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<DealRoomResponse> {
+    const result = await this.sectionPatchService.patchParticipant(
+      publicId,
+      dto,
+      currentUser,
+    );
+    return buildDealRoomResponse(
+      result.deal,
+      result.missing_fields,
+      result.allowed_actions,
+    );
+  }
+
+  /**
+   * `PATCH /v1/deals/:publicId/sections/delivery`
+   *
+   * Edit delivery section fields (R7.1):
+   * `delivery_method`, `delivery_address`, `delivery_note`.
+   *
+   * Delivery fields are entirely non-material — approvals and status
+   * are preserved (R7.4).
+   *
+   * Errors:
+   *   - 404 `deal.not_found`            — `public_id` does not match.
+   *   - 403 `auth.role_forbidden`       — caller is not a participant (R7.6).
+   *   - 400 `deal.locked_after_payment` — status is past `READY_FOR_PAYMENT` (R7.5).
+   *   - 400 `deal.invalid_field`        — out-of-bound value (R7.7).
+   *
+   * Requirements: R7.1, R7.4, R7.5, R7.7.
+   */
+  @UseGuards(AuthGuard)
+  @Patch(':publicId/sections/delivery')
+  @HttpCode(HttpStatus.OK)
+  async patchDelivery(
+    @Param('publicId') publicId: string,
+    @Body() dto: PatchDeliveryDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<DealRoomResponse> {
+    const result = await this.sectionPatchService.patchDelivery(
+      publicId,
+      dto,
+      currentUser,
+    );
+    return buildDealRoomResponse(
+      result.deal,
+      result.missing_fields,
+      result.allowed_actions,
+    );
+  }
+
+  /**
+   * `PATCH /v1/deals/:publicId/sections/payout`
+   *
+   * Edit payout section fields (R7.1):
+   * `payout_khqr`, `payout_bank_name`, `payout_account_name`,
+   * `payout_account_number`. Seller-only — buyers and other roles
+   * are rejected with `auth.role_forbidden` (R7.6).
+   *
+   * Payout fields are non-material — approvals and status are
+   * preserved (R7.4).
+   *
+   * Errors:
+   *   - 404 `deal.not_found`            — `public_id` does not match.
+   *   - 403 `auth.role_forbidden`       — caller is not the seller (R7.6).
+   *   - 400 `deal.locked_after_payment` — status is past `READY_FOR_PAYMENT` (R7.5).
+   *   - 400 `deal.invalid_field`        — out-of-bound value (R7.7).
+   *
+   * Requirements: R7.1, R7.4, R7.5, R7.6, R7.7.
+   */
+  @UseGuards(AuthGuard)
+  @Patch(':publicId/sections/payout')
+  @HttpCode(HttpStatus.OK)
+  async patchPayout(
+    @Param('publicId') publicId: string,
+    @Body() dto: PatchPayoutDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<DealRoomResponse> {
+    const result = await this.sectionPatchService.patchPayout(
+      publicId,
+      dto,
+      currentUser,
+    );
+    return buildDealRoomResponse(
+      result.deal,
+      result.missing_fields,
+      result.allowed_actions,
+    );
   }
 }
 

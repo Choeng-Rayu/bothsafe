@@ -87,6 +87,20 @@ services:
       retries: 10
     networks: [bothsafe-net]
 
+  migrator:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: bothsafe-migrator
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://bothsafe:${POSTGRES_PASSWORD}@postgres:5432/bothsafe?schema=public
+    command: ["npx", "prisma", "migrate", "deploy"]
+    restart: "no"
+    networks: [bothsafe-net]
+
   backend:
     build:
       context: ./backend
@@ -100,6 +114,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       PORT: 3003

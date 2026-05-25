@@ -69,4 +69,11 @@ export default () => ({
     bootstrapEmail: process.env.ADMIN_BOOTSTRAP_EMAIL,
     bootstrapPassword: process.env.ADMIN_BOOTSTRAP_PASSWORD,
   },
+
+  bakong: {
+    accountId: process.env.BAKONG_ACCOUNT_ID ?? '',
+    merchantName: process.env.BAKONG_MERCHANT_NAME ?? 'BothSafe Escrow',
+    merchantCity: process.env.BAKONG_MERCHANT_CITY ?? 'Phnom Penh',
+    apiToken: process.env.BAKONG_API_TOKEN ?? '',
+  },
 });

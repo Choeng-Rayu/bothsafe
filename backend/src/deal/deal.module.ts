@@ -26,6 +26,11 @@ import { AuditModule } from '../audit';
 // `imports: [DealModule]`.
 import { ApprovalService } from './approval.service';
 import { DealController } from './deal.controller';
+// task 5.6 — `DealSectionPatchService` owns the four section-patch
+// endpoints (product / participant / delivery / payout) per R7.1–R7.7.
+// Lives inside the deal module so it shares the same `AuditModule`
+// import as `DealService` / `ApprovalService`.
+import { DealSectionPatchService } from './deal-section-patch.service';
 import { DealService } from './deal.service';
 // task 5.7
 import { InviteService } from './invite.service';
@@ -40,7 +45,19 @@ import { InviteService } from './invite.service';
   // task 5.9 — `DealController` is registered here so `AppModule` only
   // needs `DealModule` in its `imports` array.
   controllers: [DealController],
-  providers: [DealService, InviteService, ApprovalService],
-  exports: [DealService, InviteService, ApprovalService],
+  providers: [
+    DealService,
+    InviteService,
+    ApprovalService,
+    // task 5.6
+    DealSectionPatchService,
+  ],
+  exports: [
+    DealService,
+    InviteService,
+    ApprovalService,
+    // task 5.6
+    DealSectionPatchService,
+  ],
 })
 export class DealModule {}

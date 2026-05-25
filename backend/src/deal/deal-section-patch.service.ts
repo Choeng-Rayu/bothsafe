@@ -54,7 +54,7 @@ import {
 } from '../common/constants';
 import { DealStatus, ParticipantRole } from '../common/enums';
 import { DomainException } from '../common/errors';
-import { assertValidDealAmount } from '../common/money';
+import { assertValidDealAmount, formatMoney } from '../common/money';
 import { PrismaService } from '../prisma';
 import { computeAllowedActions } from './deal.allowed-actions';
 import { computeMissingFields } from './deal.missing-fields';
@@ -128,13 +128,22 @@ export class DealSectionPatchService {
     return this.prisma.runInTransaction(async (tx) => {
       const { deal, participant } = await this.loadAndAuthorise(tx, publicId, actor.id);
 
-      // Validate deal_amount separately since it has money semantics.
+      // Validate + canonicalise `deal_amount` upfront. We persist and
+      // compare against the canonical 2dp form so a client re-POSTing
+      // `"12.30"` against a stored `12.3` does NOT register as a
+      // material edit (R7.4 — no-op edits must preserve approvals).
+      // R7.7 — out-of-range / out-of-precision values surface as
+      // `deal.invalid_field` with the parser's reason in
+      // `details.reason`.
+      let canonicalDealAmount: string | undefined;
       if (dto.deal_amount !== undefined) {
         try {
-          assertValidDealAmount(dto.deal_amount);
-        } catch {
+          canonicalDealAmount = formatMoney(assertValidDealAmount(dto.deal_amount));
+        } catch (error) {
+          const reason =
+            error instanceof RangeError ? error.message : 'money.invalid';
           throw DomainException.badRequest('deal.invalid_field', {
-            details: { field: 'deal_amount' },
+            details: { field: 'deal_amount', reason },
           });
         }
       }
@@ -146,12 +155,15 @@ export class DealSectionPatchService {
       if (dto.product_description !== undefined) productData.product_description = dto.product_description;
       if (dto.quantity !== undefined) productData.quantity = dto.quantity;
       if (dto.condition !== undefined) productData.condition = dto.condition;
-      if (dto.deal_amount !== undefined) productData.deal_amount = dto.deal_amount;
+      if (canonicalDealAmount !== undefined) productData.deal_amount = canonicalDealAmount;
       if (dto.currency !== undefined) productData.currency = dto.currency as Prisma.EnumCurrencyFieldUpdateOperationsInput['set'];
 
       // Detect whether any material-edit field changed by comparing
-      // new values against the current deal row.
-      const isMaterialEdit = this.detectMaterialEdit(deal, dto);
+      // new values against the current deal row. We pass the
+      // canonical (2dp normalised) `deal_amount` string so the
+      // detector compares apples-to-apples regardless of the wire
+      // form the client used.
+      const isMaterialEdit = this.detectMaterialEdit(deal, dto, canonicalDealAmount);
 
       let updatedDeal = await tx.dealRoom.update({
         where: { id: deal.id },
@@ -403,18 +415,47 @@ export class DealSectionPatchService {
    * Note: `deal_amount` comparison is string-based after normalisation
    * since both sides may use different decimal representations.
    */
-  private detectMaterialEdit(deal: DealRoom, dto: PatchProductDto): boolean {
+  /**
+   * Detect whether the patch touches any material-edit fields (R7.3).
+   *
+   * A field is considered "changed" when the DTO supplies a value that
+   * differs from the current deal row. This avoids spurious approval
+   * resets when a client re-POSTs the same value (R7.4 — a no-op
+   * edit must preserve approvals).
+   *
+   * `canonicalDealAmount` carries the canonical 2dp form computed by
+   * `assertValidDealAmount` + `formatMoney` from the DTO; the DB-side
+   * value is normalised to the same shape via `formatMoney(parseMoney(...))`
+   * inside this helper. Both sides therefore go through the same
+   * pipeline and `"12.30" === "12.30"` regardless of the wire form
+   * used by either side.
+   */
+  private detectMaterialEdit(
+    deal: DealRoom,
+    dto: PatchProductDto,
+    canonicalDealAmount: string | undefined,
+  ): boolean {
     for (const field of DEAL_MATERIAL_EDIT_FIELDS) {
       const dtoValue = (dto as Record<string, unknown>)[field];
       if (dtoValue === undefined) continue;
 
       const currentValue = (deal as Record<string, unknown>)[field];
 
-      // For deal_amount, compare normalised decimal strings.
+      // For deal_amount, compare canonical 2dp strings on both sides.
       if (field === 'deal_amount') {
-        const normalised = String(dtoValue);
-        const currentStr = currentValue == null ? null : String(currentValue);
-        if (normalised !== currentStr) return true;
+        const newCanonical = canonicalDealAmount ?? null;
+        let storedCanonical: string | null = null;
+        if (currentValue !== null && currentValue !== undefined) {
+          try {
+            storedCanonical = formatMoney(currentValue as Prisma.Decimal);
+          } catch {
+            // Defensive — a malformed stored value cannot be canonicalised.
+            // Fall back to a string comparison so we surface a difference
+            // rather than silently treating it as a no-op.
+            storedCanonical = String(currentValue);
+          }
+        }
+        if (newCanonical !== storedCanonical) return true;
       } else {
         if (String(dtoValue) !== String(currentValue ?? '')) return true;
       }

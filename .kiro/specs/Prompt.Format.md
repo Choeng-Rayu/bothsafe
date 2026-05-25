@@ -25,3 +25,35 @@ Follow this order when working on each task:
 3. Check the Design/UX file for visual context.
 4. Implement the code accordingly.
 5. **Mark the task complete** by changing `[ ]` → `[x]` once implementation is done.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Execute task **3.8 Implement `IdempotencyMiddleware` keyed on `Idempotency-Key` header** from the BothSafe Deal Flow spec.
+
+Spec path: `/home/rayu/bothsafe/.kiro/specs/bothsafe-deal-flow/`
+Tasks file: `/home/rayu/bothsafe/.kiro/specs/bothsafe-deal-flow/tasks.md`
+
+Read tasks.md, requirements.md, and design.md in that spec folder, then implement task 3.8. Key things to know:
+- Backend: `/home/rayu/bothsafe/backend` (NestJS + Prisma + PostgreSQL 16).
+- An `IdempotencyKey` Prisma model is planned (not yet migrated — that lives in section 2 work). For now, implement the middleware against the planned model interface; if the model does not yet exist in `schema.prisma`, add the model (id, key, route, request_hash, response_status, response_body Jsonb, created_at, expires_at) and run `npx prisma migrate dev --name add_idempotency_key` from `/home/rayu/bothsafe/backend`.
+- Middleware behaviour: only applies on POST/PATCH/PUT; reads `Idempotency-Key` header; computes `request_hash = sha256(method + url + body)`; on first call records pending row; on replay with matching hash returns cached response with status 200/originalStatus; on hash mismatch responds 409 with error envelope.
+- TTL: 24 h (configurable). Skip middleware on `GET`, `HEAD`, `OPTIONS`.
+- Wire in `AppModule.configure(consumer)` for the relevant routes (apply globally is fine; the middleware no-ops without the header).
+
+Verify with `npm run build` from `/home/rayu/bothsafe/backend`. Do not run destructive Prisma commands; `migrate dev` is fine in dev.

@@ -1,0 +1,308 @@
+{
+  "common": {
+    "next": "下一步",
+    "back": "返回",
+    "cancel": "取消",
+    "submit": "提交",
+    "save": "保存",
+    "delete": "删除",
+    "loading": "加载中…",
+    "error_generic": "出了点问题。请重试。",
+    "copy": "复制",
+    "copied": "已复制",
+    "close": "关闭",
+    "yes": "是",
+    "no": "否"
+  },
+  "auth": {
+    "signup_title": "创建您的 BothSafe 账户",
+    "login_title": "登录 BothSafe",
+    "email_label": "邮箱",
+    "password_label": "密码",
+    "display_name_label": "显示名称",
+    "signup_cta": "创建账户",
+    "login_cta": "登录",
+    "logout_cta": "退出登录",
+    "or_continue_with": "或使用以下方式继续",
+    "continue_with_telegram": "使用 Telegram 继续",
+    "continue_with_google": "使用 Google 继续"
+  },
+  "deal": {
+    "create": {
+      "title": "发起新交易",
+      "subtitle": "选择您的角色,开始一笔受保护的交易。",
+      "submit": "创建交易"
+    },
+    "role": {
+      "buyer": "我是买家",
+      "seller": "我是卖家"
+    },
+    "status": {
+      "draft": "草稿",
+      "awaiting_counterparty": "等待对方加入",
+      "awaiting_both_approval": "等待双方确认",
+      "ready_for_payment": "可以付款",
+      "payment_pending_verification": "付款待核实",
+      "paid_escrowed": "已付款 — 由 BothSafe 托管",
+      "seller_preparing": "卖家正在备货",
+      "shipped": "已发货",
+      "buyer_confirmed": "买家已确认收货",
+      "disputed": "有争议",
+      "release_pending": "正在释放款项",
+      "released": "已放款给卖家",
+      "refunded": "已退款",
+      "cancelled": "已取消",
+      "expired": "已过期"
+    },
+    "fields": {
+      "product_title": "商品名称",
+      "product_type": "商品类别",
+      "product_description": "描述",
+      "quantity": "数量",
+      "condition": "成色",
+      "deal_amount": "金额",
+      "currency": "货币",
+      "buyer_name": "买家姓名",
+      "buyer_phone": "买家电话",
+      "seller_name": "卖家姓名",
+      "seller_phone": "卖家电话"
+    },
+    "actions": {
+      "approve": "确认交易条款",
+      "edit": "编辑",
+      "share_invite": "分享邀请链接",
+      "open_invite": "打开邀请链接"
+    }
+  },
+  "invite": {
+    "preview_title": "您被邀请加入一笔 BothSafe 交易",
+    "join_cta": "加入此交易",
+    "share_warning": "任何人通过此链接都可以作为对方加入交易。请仅与目标对方分享。"
+  },
+  "wallet": {
+    "balance_title": "钱包余额",
+    "available_label": "可用余额",
+    "pending_label": "冻结中",
+    "withdraw_cta": "提现",
+    "ledger_title": "最近活动",
+    "empty_ledger": "暂无钱包活动。"
+  },
+  "payment": {
+    "pay_with_wallet": "用钱包余额支付",
+    "pay_with_khqr": "使用 KHQR 支付",
+    "pay_with_binance": "使用 Binance Pay 支付",
+    "upload_proof": "上传付款凭证",
+    "reference_note_label": "参考编号",
+    "amount_due_label": "应付金额",
+    "open_bakong": "打开 Bakong 应用付款"
+  },
+  "shipping": {
+    "upload_proof": "上传发货凭证",
+    "tracking_number_label": "运单号",
+    "delivery_company_label": "物流公司",
+    "package_photo_label": "包裹照片",
+    "delivery_receipt_label": "发货回执"
+  },
+  "confirmation": {
+    "confirm_received_cta": "确认我已收到货物",
+    "confirm_received_dialog_title": "确认收货",
+    "confirm_received_warning": "确认后款项将放给卖家,操作不可撤销。"
+  },
+  "dispute": {
+    "open_cta": "发起争议",
+    "reason": {
+      "item_not_received": "未收到货物",
+      "wrong_item": "货物不符",
+      "damaged_item": "货物损坏",
+      "fake_item": "假货或仿冒",
+      "payment_problem": "付款问题",
+      "other": "其他"
+    },
+    "message_label": "请描述发生了什么"
+  },
+  "withdrawal": {
+    "request_title": "申请提现",
+    "destination": {
+      "khqr": "KHQR 账户",
+      "bank": "银行转账",
+      "binance": "Binance Pay"
+    },
+    "bank_name_label": "银行名称",
+    "bank_account_name_label": "账户持有人姓名",
+    "bank_account_number_label": "账号",
+    "submit_cta": "提交申请",
+    "status": {
+      "pending_admin_review": "等待管理员审核",
+      "paid": "已支付",
+      "rejected": "已拒绝"
+    }
+  },
+  "admin": {
+    "payment": {
+      "verify": "核实付款",
+      "reject": "拒绝付款"
+    },
+    "deal": {
+      "release": "放款给卖家",
+      "refund": "退款给买家"
+    },
+    "withdrawal": {
+      "approve": "批准提现",
+      "reject": "拒绝提现"
+    }
+  },
+  "bot": {
+    "start": {
+      "title": "欢迎使用 BothSafe"
+    },
+    "menu": {
+      "create_deal": "发起新交易"
+    },
+    "role": {
+      "ask": "您是买家还是卖家?",
+      "buyer": "我是买家",
+      "seller": "我是卖家"
+    },
+    "deal": {
+      "created": "您的交易已就绪。"
+    },
+    "link": {
+      "private_warning": "请妥善保管此链接。任何持有此链接的人都能以您的身份操作此交易。",
+      "share_this": "把此链接发给对方,邀请他们加入。"
+    },
+    "status": {
+      "ready_for_payment": "您的交易可以付款了。"
+    },
+    "error": {
+      "invalid_amount": "请输入有效金额,例如 25.00。",
+      "deal_create_failed": "无法创建交易。请重试。"
+    },
+    "help": {
+      "escrow_explain": "BothSafe 会托管款项,直到买家确认收货,然后再放款给卖家。"
+    }
+  },
+  "errors": {
+    "auth": {
+      "required": "请先登录后再继续。",
+      "invalid_signup_data": "请检查您的邮箱和密码后重试。",
+      "invalid_credentials": "邮箱或密码错误。",
+      "rate_limited": "尝试次数过多。请稍后再试。",
+      "role_forbidden": "您无权对此交易执行该操作。",
+      "admin_required": "此操作需要管理员权限。"
+    },
+    "deal": {
+      "missing_required_fields": "仍有必填字段未填写。",
+      "invalid_field": "其中一个字段的值无效。",
+      "locked_after_payment": "交易付款后已锁定。如需修改请联系客服。",
+      "approval_not_allowed": "当前状态下不允许确认。",
+      "invalid_state": "该操作在当前交易状态下不可用。",
+      "not_found": "未找到该交易。"
+    },
+    "invite": {
+      "invalid": "邀请链接无效或已过期。",
+      "consumed": "此邀请链接已被使用。"
+    },
+    "join": {
+      "invalid_field": "请检查加入表单后重试。"
+    },
+    "wallet": {
+      "insufficient_balance": "钱包余额不足以支付此交易。",
+      "currency_mismatch": "钱包货币与交易货币不一致。",
+      "invalid_deal_state": "当前交易状态下无法用钱包付款。",
+      "transaction_failed": "钱包交易失败。未发生资金变动。",
+      "not_found": "未找到钱包。"
+    },
+    "payment": {
+      "khqr_unavailable": "KHQR 暂时不可用。请重试。",
+      "empty_receipt": "请填写付款金额或上传付款凭证。",
+      "invalid_state": "该操作在当前状态下不可用。",
+      "invalid_reason": "拒绝原因需在 1 到 500 个字符之间。"
+    },
+    "shipping": {
+      "empty_proof": "请填写运单信息、上传包裹照片或发货回执。",
+      "invalid_state": "当前状态下无法提交发货凭证。"
+    },
+    "confirmation": {
+      "invalid_state": "当前状态下无法确认收货。",
+      "already_confirmed": "您已确认此交易。"
+    },
+    "dispute": {
+      "invalid_state": "当前状态下无法发起争议。",
+      "duplicate_active": "此交易已有未结争议。",
+      "invalid_reason": "请选择有效的争议原因。",
+      "invalid_message_length": "争议描述需在 10 到 2000 个字符之间。"
+    },
+    "withdrawal": {
+      "invalid_amount": "请输入有效的提现金额。",
+      "invalid_destination": "请提供有效的提现目的地。",
+      "invalid_status": "提现申请当前状态不允许此操作。",
+      "not_found": "未找到提现申请。"
+    },
+    "storage": {
+      "invalid_file": "文件类型不支持。请使用 10 MB 以内的 JPG、PNG 或 PDF 文件。",
+      "upload_failed": "上传失败。请重试。"
+    },
+    "rate": {
+      "exceeded": "请求过于频繁。请稍后再试。"
+    },
+    "binance": {
+      "unavailable": "Binance Pay 暂时不可用。",
+      "invalid_signature": "无法验证 Binance Pay 签名。",
+      "order_not_found": "未找到 Binance Pay 订单。"
+    },
+    "idempotency": {
+      "mismatch": "此请求曾以不同参数处理过。"
+    },
+    "validation": {
+      "invalid_field": "其中一个字段的值无效。",
+      "required_field": "此字段为必填项。",
+      "out_of_range": "数值超出允许范围。"
+    }
+  },
+  "messages": {
+    "deal": {
+      "created": "交易已创建。",
+      "updated": "交易已更新。",
+      "approved": "已确认交易条款。",
+      "joined": "您已加入此交易。"
+    },
+    "payment": {
+      "proof_uploaded": "付款凭证已上传。",
+      "verified": "付款已核实。",
+      "released": "款项已放给卖家。"
+    },
+    "shipping": {
+      "uploaded": "发货凭证已上传。"
+    },
+    "confirmation": {
+      "received": "已确认收货。"
+    },
+    "dispute": {
+      "opened": "争议已发起。",
+      "resolved": "争议已解决。"
+    },
+    "withdrawal": {
+      "requested": "已提交提现申请。",
+      "paid": "提现已支付。",
+      "rejected": "提现申请已被拒绝。"
+    }
+  },
+  "notifications": {
+    "counterparty_joined": "对方已加入此交易。",
+    "deal_updated": "交易已更新。",
+    "both_approved": "双方已确认。交易可以付款了。",
+    "payment_proof_uploaded": "已提交付款凭证待审核。",
+    "payment_verified": "付款已核实,卖家可以备货了。",
+    "payment_rejected": "付款已被拒绝。",
+    "seller_should_ship": "款项已托管,请尽快发货。",
+    "shipping_uploaded": "卖家已上传发货凭证。",
+    "buyer_confirmed": "买家已确认收货。",
+    "dispute_opened": "此交易已发起争议。",
+    "payout_released": "款项已放至卖家钱包。",
+    "refund_completed": "退款已完成。",
+    "withdrawal_requested": "已提交提现申请。",
+    "withdrawal_paid": "提现已支付。",
+    "withdrawal_rejected": "提现申请已被拒绝。",
+    "admin_release_failed": "自动放款失败,需要管理员处理。"
+  }
+}

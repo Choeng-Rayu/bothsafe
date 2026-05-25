@@ -50,6 +50,16 @@ export type { ApprovalViewer, ApprovalResult } from './approval.service';
 export { DealController } from './deal.controller';
 export type { DealRoomResponse } from './deal.controller';
 
+// task 5.6 — Section-patch service + DTOs. Re-exported so feature
+// modules / tests can resolve them through the deal barrel without
+// reaching past the module boundary.
+export { DealSectionPatchService } from './deal-section-patch.service';
+export type { DealRoomApiResponse } from './deal-section-patch.service';
+export { PatchProductDto } from './dto/patch-product.dto';
+export { PatchParticipantDto } from './dto/patch-participant.dto';
+export { PatchDeliveryDto } from './dto/patch-delivery.dto';
+export { PatchPayoutDto } from './dto/patch-payout.dto';
+
 // task 5.2 — DTO for `POST /v1/deals` request body.
 export { CreateDealDto } from './dto/create-deal.dto';
 

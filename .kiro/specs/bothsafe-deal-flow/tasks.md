@@ -53,156 +53,156 @@ Convention for this file:
     - tsc failures block the edit (exit 2); prettier/eslint warnings don't.
     - _Requirements: none directly — developer ergonomics, complements R-lint discipline._
 
-- [ ] 2. Define Prisma schema and database migrations
-  - [ ] 2.1 Switch Prisma datasource to PostgreSQL provider and configure `migrator` vs `app` DB roles
+- [x] 2. Define Prisma schema and database migrations
+  - [x] 2.1 Switch Prisma datasource to PostgreSQL provider and configure `migrator` vs `app` DB roles
     - Update `prisma/schema.prisma` provider to `postgresql`.
     - Document role split (`migrator` for DDL, `app` for DML) in `prisma/README.md`.
     - _Requirements: design "Stack and deployment summary", "Append-only enforcement"_
 
-  - [ ] 2.2 Add native Postgres enums to schema
+  - [x] 2.2 Add native Postgres enums to schema
     - `deal_status`, `currency`, `participant_role`, `creator_source`, `preferred_lang`, `withdrawal_status`, `withdrawal_destination`, `dispute_reason`, `ledger_entry_type`, `ledger_direction`, `notification_event`, `outbox_status`.
     - _Requirements: design "Postgres-level types and enums"; AGENTS.md "Deal Status Enum"_
 
-  - [ ] 2.3 Add `User`, `ExternalIdentity`, `Session`, `AuthAttempt` models
+  - [x] 2.3 Add `User`, `ExternalIdentity`, `Session`, `AuthAttempt` models
     - Unique `(provider, external_id)` on `ExternalIdentity` for dedup.
     - `Session.token_hash` UNIQUE; `expires_at` index.
     - `AuthAttempt(identity_key, attempted_at)` index for sliding window.
     - _Requirements: R1.1, R1.2, R1.3, R1.4, R1.7, R1.9_
 
-  - [ ] 2.4 Add `DealRoom`, `DealParticipant` models
+  - [x] 2.4 Add `DealRoom`, `DealParticipant` models
     - `DealRoom.public_id` UNIQUE; `reference_note` UNIQUE; `terms_hash` column; `expires_at` for invite clock.
     - `DealParticipant`: UNIQUE `(deal_id, role)` and UNIQUE `(deal_id, user_id)`.
     - Indexes: `(status)`, `(creator_user_id, created_at DESC)`.
     - _Requirements: R2.6, R2.8, R3.4, R3.5, R5.6, R6.1, R7.1, R7.2_
 
-  - [ ] 2.5 Add `InviteToken`, `CreatorAccessToken`, `ParticipantAccessToken` models
+  - [x] 2.5 Add `InviteToken`, `CreatorAccessToken`, `ParticipantAccessToken` models
     - Token hash storage only; `expires_at` and `invalidated_at` on `InviteToken`.
     - UNIQUE constraints to prevent duplicate token hashes.
     - _Requirements: R2.9, R3.6, R5.6, R5.8_
 
-  - [ ] 2.6 Add `Approval`, `PaymentProof`, `ShippingProof`, `Confirmation`, `Dispute`, `DisputeEvidence` models
+  - [x] 2.6 Add `Approval`, `PaymentProof`, `ShippingProof`, `Confirmation`, `Dispute`, `DisputeEvidence` models
     - `Approval.terms_hash` snapshot; `invalidated_at` for material-edit invalidation.
     - `Confirmation`: UNIQUE `(deal_id)` and `(deal_id, idempotency_key)`.
     - `Dispute` partial UNIQUE index `(deal_id) WHERE status='open'`.
     - _Requirements: R8.1, R8.4, R10.4, R12.2, R13.2, R17.5, R17.6_
 
-  - [ ] 2.7 Add `Wallet`, `WalletRole`, `WalletLedgerEntry` models
+  - [x] 2.7 Add `Wallet`, `WalletRole`, `WalletLedgerEntry` models
     - UNIQUE `(user_id, currency)` on `Wallet`.
     - `WalletLedgerEntry.amount NUMERIC(18,2) CHECK (amount > 0)`; `created_at TIMESTAMPTZ(3)` (ms precision).
     - Indexes: `(wallet_id, created_at DESC)`, `(related_deal_id)`, `(related_withdrawal_id)`.
     - _Requirements: R14.1, R14.6_
 
-  - [ ] 2.8 Add `WithdrawalRequest` model
+  - [x] 2.8 Add `WithdrawalRequest` model
     - Branched destination columns (KHQR vs bank).
     - Indexes: `(seller_user_id, created_at DESC)`, `(status, created_at DESC)`.
     - _Requirements: R15.1–R15.5, R16.1_
 
-  - [ ] 2.9 Add `AuditLogEntry`, `NotificationOutboxEntry`, `IdempotencyKey`, `BotConversation` models
+  - [x] 2.9 Add `AuditLogEntry`, `NotificationOutboxEntry`, `IdempotencyKey`, `BotConversation` models
     - `AuditLogEntry.created_at TIMESTAMPTZ(3)`; indexes on `(deal_id)`, `(actor_user_id)`, `(action_type)`.
     - `NotificationOutboxEntry`: `status, created_at` index for drainer.
     - `IdempotencyKey`: UNIQUE `(scope, key, user_id)`.
     - _Requirements: R18.11, R19.10, R20.1–R20.3_
 
-  - [ ] 2.10 Apply append-only enforcement (post-migration SQL)
+  - [x] 2.10 Apply append-only enforcement (post-migration SQL)
     - REVOKE UPDATE/DELETE/TRUNCATE on `wallet_ledger_entry`, `audit_log_entry` from `app` role.
     - Create `reject_mutation()` function and `BEFORE UPDATE OR DELETE OR TRUNCATE` triggers.
     - Run as `migrator` role; tests that the `app` role cannot mutate.
     - _Requirements: R14.2, R20.5_
 
-  - [ ] 2.11 Run initial Prisma migration and seed script
+  - [x] 2.11 Run initial Prisma migration and seed script
     - `npx prisma migrate dev --name init_deal_flow`.
     - Seed: one platform user, escrow wallets per currency, `WalletRole='escrow'` rows.
     - _Requirements: design "Wallet and ledger" (escrow wallet definition)_
 
-- [ ] 3. Build shared utilities and cross-cutting modules
-  - [ ] 3.1 Implement `PrismaService` and global `PrismaModule`
+- [x] 3. Build shared utilities and cross-cutting modules
+  - [x] 3.1 Implement `PrismaService` and global `PrismaModule`
     - `onModuleInit` connects; `enableShutdownHooks`.
     - Expose typed `$transaction` helper.
     - _Requirements: AGENTS.md "Backend Coding Rules"_
 
-  - [ ] 3.2 Create `src/common/constants.ts` and `src/common/enums.ts`
+  - [x] 3.2 Create `src/common/constants.ts` and `src/common/enums.ts`
     - Mirror Prisma enums for compile-time use; freeze deal-status transitions table.
     - _Requirements: AGENTS.md "Deal Status Enum"_
 
-  - [ ] 3.3 Implement `src/common/money.ts` Decimal helpers
+  - [x] 3.3 Implement `src/common/money.ts` Decimal helpers
     - Two-decimal fixed-point parse/format; `gte`, `lt`, `minus`, `plus` wrappers around `decimal.js`.
     - _Requirements: R2.1, R3.1, R7.1, R14.1, R15.1_
 
-  - [ ] 3.4 Implement `src/common/tokens.ts` (cuid v2 + SHA-256)
+  - [x] 3.4 Implement `src/common/tokens.ts` (cuid v2 + SHA-256)
     - `generateRawToken()`, `hashToken(raw)`, `verifyToken(raw, hash)` (constant-time compare).
     - _Requirements: R2.9, R5.8, design "Token strategy"_
 
-  - [ ] 3.5 Implement `src/auth/password.ts` (argon2id wrapper)
+  - [x] 3.5 Implement `src/auth/password.ts` (argon2id wrapper)
     - `hashPassword`, `verifyPassword`; parameters m=64MiB, t=3, p=4, hashLength=32.
     - Never log plaintext or hash.
     - _Requirements: R1.4, R1.9, design "Password hashing"_
 
-  - [ ] 3.6 Implement global exception filter and error envelope
+  - [x] 3.6 Implement global exception filter and error envelope
     - Map domain exceptions to `{ error: { code, message_key, details? } }` shape.
     - Codes: `auth.*`, `deal.*`, `wallet.*`, `payment.*`, `shipping.*`, `confirmation.*`, `dispute.*`, `withdrawal.*`, `invite.*`, `storage.*`, `rate.exceeded`.
     - _Requirements: AGENTS.md "Backend Coding Rules" (`message_key`); R1.5, R1.6, R1.7, R7.5, R7.7, R8.2, R9.3–R9.6, R10.5, R10.7, R10.8, R11.6, R11.7, R12.3, R12.5, R12.6, R13.7, R14.2, R15.6, R15.7, R16.4, R16.5, R16.8, R17.4, R17.6, R17.9_
 
-  - [ ] 3.7 Configure `@nestjs/throttler` with named buckets
+  - [x] 3.7 Configure `@nestjs/throttler` with named buckets
     - Global default; named buckets for `auth_login`, `auth_signup`, `invite_preview`.
     - _Requirements: R1.7, R4.5, R4.6_
 
-  - [ ] 3.8 Implement `IdempotencyMiddleware` keyed on `Idempotency-Key` header
+  - [x] 3.8 Implement `IdempotencyMiddleware` keyed on `Idempotency-Key` header
     - Store `(scope, key, user_id)` row; on cache hit, return previous response from `result_ref`.
     - Insert inside the originating transaction.
     - Scopes: `confirm_received`, `approve_withdrawal`, `reject_withdrawal`, `khqr_receipt`, `tg_create`.
     - _Requirements: R13.2, R16.2, R16.3, R18.11, design "Idempotency"_
 
-  - [ ] 3.9 Implement `AuditService.record(entry, tx)`
+  - [x] 3.9 Implement `AuditService.record(entry, tx)`
     - Required to be called inside the originating tx; throws if no tx is provided.
     - _Requirements: R20.1, R20.2, R20.3, R20.4_
 
-  - [ ] 3.10 Set up i18n key conventions (backend message keys + frontend translation files)
+  - [x] 3.10 Set up i18n key conventions (backend message keys + frontend translation files)
     - Create `frontend/messages/{km,en,zh}.json` with stub keys for `auth.*`, `deal.*`, `wallet.*`, `payment.*`, `bot.*`.
     - _Requirements: AGENTS.md "i18n Key Structure"_
 
-  - [ ] 3.11 Property tests for shared utilities*
+  - [x] 3.11 Property tests for shared utilities*
     - **Property: hash determinism** — `hashToken(x) === hashToken(x)` and uniqueness across distinct inputs (sample of 1000).
     - **Property: money round-trip** — `parse(format(x)) === x` for all 2-decimal values in range.
     - **Validates: R2.1, R14.1**
 
-- [ ] 4. Implement Auth module
-  - [ ] 4.1 `AuthService.signupEmail` (validation + argon2id + create User + Session)
+- [x] 4. Implement Auth module
+  - [x] 4.1 `AuthService.signupEmail` (validation + argon2id + create User + Session)
     - Email format + 8–128 char password; no `User` row on validation failure.
     - _Requirements: R1.1, R1.4, R1.5, R1.9_
 
-  - [ ] 4.2 `AuthService.loginEmail` (verify + Session) with 2 s upper bound
+  - [x] 4.2 `AuthService.loginEmail` (verify + Session) with 2 s upper bound
     - Constant-time password verify; record `AuthAttempt`.
     - _Requirements: R1.1, R1.6, R1.7, R1.9_
 
-  - [ ] 4.3 `AuthService.loginTelegram` (initData HMAC verify) and `loginGoogle` (id_token verify)
+  - [x] 4.3 `AuthService.loginTelegram` (initData HMAC verify) and `loginGoogle` (id_token verify)
     - Look up or upsert `ExternalIdentity` (`provider`, `external_id`); link to existing `User`.
     - _Requirements: R1.1, R1.3_
 
-  - [ ] 4.4 Session issuance + cookie middleware
+  - [x] 4.4 Session issuance + cookie middleware
     - 24 h TTL; SHA-256 token hash stored in `Session.token_hash`; `Set-Cookie: bs_session; HttpOnly; Secure; SameSite=Lax; Path=/`.
     - _Requirements: R1.2_
 
-  - [ ] 4.5 Sliding-window rate limiter (5 fails / 15 min) backed by `AuthAttempt`
+  - [x] 4.5 Sliding-window rate limiter (5 fails / 15 min) backed by `AuthAttempt`
     - Bucketed by `identity_key` (`email` or `tg:<id>` or `google:<sub>`).
     - _Requirements: R1.7_
 
-  - [ ] 4.6 `AuthGuard` (session) + `AdminGuard` (`User.is_admin === true`)
+  - [x] 4.6 `AuthGuard` (session) + `AdminGuard` (`User.is_admin === true`)
     - Unauthenticated requests on guarded routes return `auth.required` with redirect target.
     - _Requirements: R1.8, R16.6, R16.8_
 
-  - [ ] 4.7 Auth controller + DTOs
+  - [x] 4.7 Auth controller + DTOs
     - Routes: `POST /v1/auth/email/signup|login`, `/auth/telegram`, `/auth/google`, `/auth/logout`, `GET /auth/me`.
     - _Requirements: R1.1–R1.8_
 
-  - [ ] 4.8 Property test: rate limiter window correctness
+  - [x] 4.8 Property test: rate limiter window correctness
     - **Property: sliding window** — for any sequence of timestamps, the deny decision matches the spec (≥5 fails in last 15 min ⇒ deny).
     - **Validates: R1.7**
 
-  - [ ] 4.9 Unit tests: argon2id round-trip and timing safety
+  - [x] 4.9 Unit tests: argon2id round-trip and timing safety
     - _Requirements: R1.4, R1.6, R1.9_
 
 - [ ] 5. Implement Deal/Invite/Approval module
-  - [ ] 5.1 `DealService.transition(deal, to, actor, tx)` — single transition engine
+  - [x] 5.1 `DealService.transition(deal, to, actor, tx)` — single transition engine
     - Validates allowed `prev → next` per state machine; writes `AuditLogEntry` in same tx.
     - _Requirements: R20.1, AGENTS.md "Core Domain Rules" #6, design "Deal Status state machine"_
 
@@ -211,16 +211,16 @@ Convention for this file:
     - Issue `Creator_Access_Token` + `Invite_Token`; store hashes; return raw values once.
     - _Requirements: R2.1–R2.9, R3.1–R3.6_
 
-  - [ ] 5.3 `DealService.computeTermsHash(deal)`
+  - [x] 5.3 `DealService.computeTermsHash(deal)`
     - Trim + collapse whitespace; normalise `Deal_Amount` to two-decimal string; sorted-key JSON; SHA-256 hex.
     - _Requirements: R8.1_
 
-  - [ ] 5.4 `DealService.computeMissingFields(deal)`
+  - [x] 5.4 `DealService.computeMissingFields(deal)`
     - Set: `Product_Title`, `Product_Type`, `Deal_Amount`, `Buyer_Name`, `Seller_Name`.
     - Treat null/empty/whitespace and out-of-range `Deal_Amount` as empty.
     - _Requirements: R6.1, R6.2_
 
-  - [ ] 5.5 `DealService.computeAllowedActions(deal, viewer)`
+  - [x] 5.5 `DealService.computeAllowedActions(deal, viewer)`
     - Viewer-scoped; gates `pay_now`, `submit_khqr_receipt`, `submit_shipping_proof`, `confirm_received`, `open_dispute`.
     - _Requirements: R6.3, R9.1, R12.1, R13.1, R17.1_
 
@@ -230,7 +230,7 @@ Convention for this file:
     - Lock all edits after payment with `deal.locked_after_payment`.
     - _Requirements: R7.1–R7.7_
 
-  - [ ] 5.7 `InviteService` — preview + consume
+  - [x] 5.7 `InviteService` — preview + consume
     - `GET /v1/deals/:publicId/invite-preview` (public, rate-limited 30/min/IP).
     - Hash candidate token, check `expires_at` and `invalidated_at`.
     - On invalid token, never leak deal data.
@@ -592,39 +592,39 @@ Convention for this file:
     - End-to-end: dispute → admin refund.
     - _Requirements: R1–R20 (smoke coverage)_
 
-  - [~] 14.6 Checkpoint
+  - [ ] 14.6 Checkpoint
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 15. Deployment finalization
-  - [~] 15.1 Production `Dockerfile` for backend (multi-stage)
+  - [ ] 15.1 Production `Dockerfile` for backend (multi-stage)
     - Builder runs `prisma generate` + `npm run build`; runner uses non-root user.
     - _Requirements: design "Deployment Topology"_
 
-  - [~] 15.2 Production `Dockerfile` for frontend (Next.js standalone output)
+  - [ ] 15.2 Production `Dockerfile` for frontend (Next.js standalone output)
     - `next.config.ts` `output: 'standalone'`; copy `.next/standalone` + `static` + `public`.
     - _Requirements: design "Deployment Topology"_
 
-  - [~] 15.3 Backend health endpoint `GET /v1/health`
+  - [ ] 15.3 Backend health endpoint `GET /v1/health`
     - Returns `{ db: 'ok'|'fail', minio: 'ok'|'fail' }`; used by Docker healthcheck.
     - _Requirements: design "Observability → Healthchecks"_
 
-  - [~] 15.4 One-shot `migrator` service in `docker-compose.yml`
+  - [ ] 15.4 One-shot `migrator` service in `docker-compose.yml`
     - Runs `prisma migrate deploy` then exits; uses `migrator` Postgres role with DDL privileges.
     - _Requirements: design "Append-only enforcement"_
 
-  - [~] 15.5 Postgres backup script
+  - [ ] 15.5 Postgres backup script
     - Host cron entry; `pg_dump -Fc` nightly to `/var/bothsafe/backups/postgres/$(date +%F).dump`; 14-day retention.
     - _Requirements: design "Backups"_
 
-  - [~] 15.6 TLS via Let's Encrypt
+  - [ ] 15.6 TLS via Let's Encrypt
     - Certbot via webroot; renewal cron with deploy hook `docker compose exec nginx nginx -s reload`.
     - _Requirements: design "TLS"_
 
-  - [~] 15.7 Pino logger redaction config
+  - [ ] 15.7 Pino logger redaction config
     - Redact `password`, `password_hash`, `token`, `raw_*_token`, `Authorization`, `Cookie`, `TELEGRAM_BOT_TOKEN`, `*_secret`.
     - _Requirements: R1.9, R18.8, design "Cross-Cutting → Security → Logging"_
 
-  - [~] 15.8 Final checkpoint
+  - [ ] 15.8 Final checkpoint
     - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 16. Implement Binance Pay buyer payment (R21)

@@ -50,4 +50,10 @@ export const envValidationSchema = Joi.object({
   // Session TTL in days. Backs `bothsafe_session` cookie maxAge and the
   // `Session.expires_at` clock (R1.2). 1 day is the spec minimum.
   SESSION_TTL_DAYS: Joi.number().integer().positive().default(1),
+
+  // Bakong / KHQR
+  BAKONG_ACCOUNT_ID: Joi.string().allow('').default(''),
+  BAKONG_MERCHANT_NAME: Joi.string().allow('').default('BothSafe Escrow'),
+  BAKONG_MERCHANT_CITY: Joi.string().allow('').default('Phnom Penh'),
+  BAKONG_API_TOKEN: Joi.string().allow('').default(''),
 }).options({ allowUnknown: true });

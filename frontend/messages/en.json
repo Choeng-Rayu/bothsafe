@@ -1,0 +1,308 @@
+{
+  "common": {
+    "next": "Next",
+    "back": "Back",
+    "cancel": "Cancel",
+    "submit": "Submit",
+    "save": "Save",
+    "delete": "Delete",
+    "loading": "Loading…",
+    "error_generic": "Something went wrong. Please try again.",
+    "copy": "Copy",
+    "copied": "Copied",
+    "close": "Close",
+    "yes": "Yes",
+    "no": "No"
+  },
+  "auth": {
+    "signup_title": "Create your BothSafe account",
+    "login_title": "Sign in to BothSafe",
+    "email_label": "Email",
+    "password_label": "Password",
+    "display_name_label": "Display name",
+    "signup_cta": "Create account",
+    "login_cta": "Sign in",
+    "logout_cta": "Sign out",
+    "or_continue_with": "or continue with",
+    "continue_with_telegram": "Continue with Telegram",
+    "continue_with_google": "Continue with Google"
+  },
+  "deal": {
+    "create": {
+      "title": "Start a new deal",
+      "subtitle": "Choose your role to begin a protected transaction.",
+      "submit": "Create deal"
+    },
+    "role": {
+      "buyer": "I'm the buyer",
+      "seller": "I'm the seller"
+    },
+    "status": {
+      "draft": "Draft",
+      "awaiting_counterparty": "Waiting for the other party",
+      "awaiting_both_approval": "Waiting for both sides to approve",
+      "ready_for_payment": "Ready for payment",
+      "payment_pending_verification": "Payment pending verification",
+      "paid_escrowed": "Paid — held in escrow",
+      "seller_preparing": "Seller preparing shipment",
+      "shipped": "Shipped",
+      "buyer_confirmed": "Buyer confirmed receipt",
+      "disputed": "Disputed",
+      "release_pending": "Release pending",
+      "released": "Released to seller",
+      "refunded": "Refunded",
+      "cancelled": "Cancelled",
+      "expired": "Expired"
+    },
+    "fields": {
+      "product_title": "Product title",
+      "product_type": "Product type",
+      "product_description": "Description",
+      "quantity": "Quantity",
+      "condition": "Condition",
+      "deal_amount": "Amount",
+      "currency": "Currency",
+      "buyer_name": "Buyer name",
+      "buyer_phone": "Buyer phone",
+      "seller_name": "Seller name",
+      "seller_phone": "Seller phone"
+    },
+    "actions": {
+      "approve": "Approve deal",
+      "edit": "Edit",
+      "share_invite": "Share invite link",
+      "open_invite": "Open invite link"
+    }
+  },
+  "invite": {
+    "preview_title": "You've been invited to a BothSafe deal",
+    "join_cta": "Join this deal",
+    "share_warning": "Anyone with this link can join the deal as the other party. Share it only with the intended counterparty."
+  },
+  "wallet": {
+    "balance_title": "Wallet balance",
+    "available_label": "Available",
+    "pending_label": "On hold",
+    "withdraw_cta": "Withdraw",
+    "ledger_title": "Recent activity",
+    "empty_ledger": "No wallet activity yet."
+  },
+  "payment": {
+    "pay_with_wallet": "Pay with wallet",
+    "pay_with_khqr": "Pay with KHQR",
+    "pay_with_binance": "Pay with Binance Pay",
+    "upload_proof": "Upload payment proof",
+    "reference_note_label": "Reference note",
+    "amount_due_label": "Amount due",
+    "open_bakong": "Open Bakong app to pay"
+  },
+  "shipping": {
+    "upload_proof": "Upload shipping proof",
+    "tracking_number_label": "Tracking number",
+    "delivery_company_label": "Delivery company",
+    "package_photo_label": "Package photo",
+    "delivery_receipt_label": "Delivery receipt"
+  },
+  "confirmation": {
+    "confirm_received_cta": "Confirm I received the item",
+    "confirm_received_dialog_title": "Confirm receipt",
+    "confirm_received_warning": "Once confirmed, the seller will be paid. This can't be undone."
+  },
+  "dispute": {
+    "open_cta": "Open a dispute",
+    "reason": {
+      "item_not_received": "Item not received",
+      "wrong_item": "Wrong item",
+      "damaged_item": "Damaged item",
+      "fake_item": "Fake or counterfeit item",
+      "payment_problem": "Payment problem",
+      "other": "Other"
+    },
+    "message_label": "Describe what happened"
+  },
+  "withdrawal": {
+    "request_title": "Request a withdrawal",
+    "destination": {
+      "khqr": "KHQR account",
+      "bank": "Bank transfer",
+      "binance": "Binance Pay"
+    },
+    "bank_name_label": "Bank name",
+    "bank_account_name_label": "Account holder name",
+    "bank_account_number_label": "Account number",
+    "submit_cta": "Submit request",
+    "status": {
+      "pending_admin_review": "Pending admin review",
+      "paid": "Paid",
+      "rejected": "Rejected"
+    }
+  },
+  "admin": {
+    "payment": {
+      "verify": "Verify payment",
+      "reject": "Reject payment"
+    },
+    "deal": {
+      "release": "Release to seller",
+      "refund": "Refund buyer"
+    },
+    "withdrawal": {
+      "approve": "Approve withdrawal",
+      "reject": "Reject withdrawal"
+    }
+  },
+  "bot": {
+    "start": {
+      "title": "Welcome to BothSafe"
+    },
+    "menu": {
+      "create_deal": "Create a new deal"
+    },
+    "role": {
+      "ask": "Are you the buyer or the seller?",
+      "buyer": "I'm the buyer",
+      "seller": "I'm the seller"
+    },
+    "deal": {
+      "created": "Your deal is ready."
+    },
+    "link": {
+      "private_warning": "Keep this link private. Anyone with it can act as you on this deal.",
+      "share_this": "Share this link with the other party to join."
+    },
+    "status": {
+      "ready_for_payment": "Your deal is ready for payment."
+    },
+    "error": {
+      "invalid_amount": "Enter a valid amount, e.g. 25.00.",
+      "deal_create_failed": "We couldn't create the deal. Please try again."
+    },
+    "help": {
+      "escrow_explain": "BothSafe holds the payment until the buyer confirms the item. Then we release it to the seller."
+    }
+  },
+  "errors": {
+    "auth": {
+      "required": "Please sign in to continue.",
+      "invalid_signup_data": "Check your email and password and try again.",
+      "invalid_credentials": "Email or password is incorrect.",
+      "rate_limited": "Too many attempts. Try again in a few minutes.",
+      "role_forbidden": "You can't perform this action on this deal.",
+      "admin_required": "Admin access is required for this action."
+    },
+    "deal": {
+      "missing_required_fields": "Some required fields are still empty.",
+      "invalid_field": "One of the fields has an invalid value.",
+      "locked_after_payment": "This deal is locked after payment. Contact support to change it.",
+      "approval_not_allowed": "Approvals aren't allowed in this state.",
+      "invalid_state": "This action isn't available in the current deal state.",
+      "not_found": "We couldn't find that deal."
+    },
+    "invite": {
+      "invalid": "This invite link is invalid or expired.",
+      "consumed": "This invite has already been used."
+    },
+    "join": {
+      "invalid_field": "Check the join form fields and try again."
+    },
+    "wallet": {
+      "insufficient_balance": "Wallet balance isn't enough to cover this deal.",
+      "currency_mismatch": "Wallet currency doesn't match the deal currency.",
+      "invalid_deal_state": "Wallet payment isn't available in this deal state.",
+      "transaction_failed": "Wallet transaction failed. No funds were moved.",
+      "not_found": "Wallet not found."
+    },
+    "payment": {
+      "khqr_unavailable": "KHQR is unavailable right now. Please try again.",
+      "empty_receipt": "Add a paid amount or upload a receipt.",
+      "invalid_state": "This action isn't available in the current state.",
+      "invalid_reason": "Provide a rejection reason between 1 and 500 characters."
+    },
+    "shipping": {
+      "empty_proof": "Add tracking info, a package photo, or a delivery receipt.",
+      "invalid_state": "Shipping proof can't be submitted in this state."
+    },
+    "confirmation": {
+      "invalid_state": "Confirmation isn't available in this state.",
+      "already_confirmed": "You already confirmed this deal."
+    },
+    "dispute": {
+      "invalid_state": "Disputes can't be opened in this state.",
+      "duplicate_active": "There's already an open dispute on this deal.",
+      "invalid_reason": "Choose a valid dispute reason.",
+      "invalid_message_length": "Dispute message must be 10–2000 characters."
+    },
+    "withdrawal": {
+      "invalid_amount": "Enter a valid withdrawal amount.",
+      "invalid_destination": "Provide a valid payout destination.",
+      "invalid_status": "Withdrawal isn't in a state where this action is allowed.",
+      "not_found": "Withdrawal request not found."
+    },
+    "storage": {
+      "invalid_file": "That file isn't accepted. Use a JPG, PNG, or PDF up to 10 MB.",
+      "upload_failed": "Upload failed. Please try again."
+    },
+    "rate": {
+      "exceeded": "Too many requests. Please slow down and try again."
+    },
+    "binance": {
+      "unavailable": "Binance Pay is unavailable right now.",
+      "invalid_signature": "Binance Pay signature could not be verified.",
+      "order_not_found": "Binance Pay order not found."
+    },
+    "idempotency": {
+      "mismatch": "This request was already processed with different parameters."
+    },
+    "validation": {
+      "invalid_field": "One of the fields has an invalid value.",
+      "required_field": "This field is required.",
+      "out_of_range": "Value is out of the allowed range."
+    }
+  },
+  "messages": {
+    "deal": {
+      "created": "Deal created.",
+      "updated": "Deal updated.",
+      "approved": "Deal approved.",
+      "joined": "You joined the deal."
+    },
+    "payment": {
+      "proof_uploaded": "Payment proof uploaded.",
+      "verified": "Payment verified.",
+      "released": "Payment released to seller."
+    },
+    "shipping": {
+      "uploaded": "Shipping proof uploaded."
+    },
+    "confirmation": {
+      "received": "Receipt confirmed."
+    },
+    "dispute": {
+      "opened": "Dispute opened.",
+      "resolved": "Dispute resolved."
+    },
+    "withdrawal": {
+      "requested": "Withdrawal requested.",
+      "paid": "Withdrawal paid.",
+      "rejected": "Withdrawal rejected."
+    }
+  },
+  "notifications": {
+    "counterparty_joined": "The other party joined the deal.",
+    "deal_updated": "The deal was updated.",
+    "both_approved": "Both sides approved. The deal is ready for payment.",
+    "payment_proof_uploaded": "A payment proof was submitted for review.",
+    "payment_verified": "Payment verified. The seller can prepare the item.",
+    "payment_rejected": "Payment was rejected.",
+    "seller_should_ship": "Payment is in escrow. Please ship the item.",
+    "shipping_uploaded": "The seller uploaded shipping proof.",
+    "buyer_confirmed": "The buyer confirmed receipt.",
+    "dispute_opened": "A dispute was opened on this deal.",
+    "payout_released": "Funds were released to the seller wallet.",
+    "refund_completed": "Refund completed.",
+    "withdrawal_requested": "Withdrawal request submitted.",
+    "withdrawal_paid": "Withdrawal paid.",
+    "withdrawal_rejected": "Withdrawal rejected.",
+    "admin_release_failed": "Auto-release failed. Admin attention required."
+  }
+}
