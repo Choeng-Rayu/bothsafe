@@ -7,12 +7,12 @@ export async function apiFetch<T>(
   opts: RequestInit = {}
 ): Promise<T> {
   const cookieStore = await cookies();
-  const session = cookieStore.get("bs_session")?.value;
+  const session = cookieStore.get("bothsafe_session")?.value;
   const res = await fetch(`${API_BASE}${path}`, {
     ...opts,
     headers: {
       "Content-Type": "application/json",
-      ...(session ? { Cookie: `bs_session=${session}` } : {}),
+      ...(session ? { Cookie: `bothsafe_session=${session}` } : {}),
       ...opts.headers,
     },
     cache: "no-store",

@@ -201,12 +201,12 @@ Convention for this file:
   - [x] 4.9 Unit tests: argon2id round-trip and timing safety
     - _Requirements: R1.4, R1.6, R1.9_
 
-- [ ] 5. Implement Deal/Invite/Approval module
+- [x] 5. Implement Deal/Invite/Approval module
   - [x] 5.1 `DealService.transition(deal, to, actor, tx)` — single transition engine
     - Validates allowed `prev → next` per state machine; writes `AuditLogEntry` in same tx.
     - _Requirements: R20.1, AGENTS.md "Core Domain Rules" #6, design "Deal Status state machine"_
 
-  - [ ] 5.2 `DealService.create` (seller flow + buyer flow)
+  - [x] 5.2 `DealService.create` (seller flow + buyer flow)
     - Validate required fields per role; ignore optional fields not allowed at seller create-step.
     - Issue `Creator_Access_Token` + `Invite_Token`; store hashes; return raw values once.
     - _Requirements: R2.1–R2.9, R3.1–R3.6_
@@ -224,7 +224,7 @@ Convention for this file:
     - Viewer-scoped; gates `pay_now`, `submit_khqr_receipt`, `submit_shipping_proof`, `confirm_received`, `open_dispute`.
     - _Requirements: R6.3, R9.1, R12.1, R13.1, R17.1_
 
-  - [ ] 5.6 Section patch endpoints
+  - [x] 5.6 Section patch endpoints
     - `PATCH /v1/deals/:publicId/sections/{product,participant,delivery,payout}`.
     - Material edit (`Product_Title`/`Description`/`Deal_Amount`/`Currency`) clears approvals + reverts to `AWAITING_BOTH_APPROVAL`.
     - Lock all edits after payment with `deal.locked_after_payment`.
@@ -236,430 +236,430 @@ Convention for this file:
     - On invalid token, never leak deal data.
     - _Requirements: R4.1–R4.6_
 
-  - [ ] 5.8 Join endpoint `POST /v1/deals/:publicId/join`
+  - [x] 5.8 Join endpoint `POST /v1/deals/:publicId/join`
     - Single tx: assign opposite role, set `AWAITING_BOTH_APPROVAL`, issue `Participant_Access_Token`, invalidate `InviteToken`.
     - Validate name length and phone format.
     - _Requirements: R5.1–R5.10_
 
-  - [ ] 5.9 Approval endpoint `POST /v1/deals/:publicId/approval`
+  - [x] 5.9 Approval endpoint `POST /v1/deals/:publicId/approval`
     - Snapshot `terms_hash`; idempotent on resubmit; transition to `READY_FOR_PAYMENT` only when both active approvals match current `terms_hash` and `missing_fields = []`.
     - Emit `BOTH_APPROVED` exactly once (outbox).
     - _Requirements: R6.4, R6.5, R8.1–R8.7_
 
-  - [ ] 5.10 Property test: `computeMissingFields` correctness
+  - [x] 5.10 Property test: `computeMissingFields` correctness
     - **Property: missing-field characterisation** — for any synthetic deal, the returned array equals `{ f ∈ required | empty(f) }`.
     - **Validates: R6.1, R6.2**
 
-  - [ ] 5.11 Property test: `computeTermsHash` canonicalisation
+  - [x] 5.11 Property test: `computeTermsHash` canonicalisation
     - **Property: hash invariance under whitespace normalisation** — `hash(d) === hash(d')` when `d` and `d'` differ only by whitespace runs / amount precision; otherwise differ.
     - **Validates: R8.1**
 
-  - [ ] 5.12 Property test: state machine `allowedTransitions`
+  - [x] 5.12 Property test: state machine `allowedTransitions`
     - **Property: closure under spec** — for any `(prev, next)` pair, `transition` succeeds iff the spec table includes it; on reject, no row mutated.
     - **Validates: R6.5, R7.5, R20.1**
 
-  - [ ] 5.13 Property test: `Approval.areBothApproved`
+  - [x] 5.13 Property test: `Approval.areBothApproved`
     - **Property: both-approved iff matching active approvals** — true exactly when the latest non-invalidated approval per role has `terms_hash === deal.terms_hash`.
     - **Validates: R8.3, R8.4, R8.7**
 
-  - [ ] 5.14 Unit tests: invite preview never leaks tokens or participant identities
+  - [x] 5.14 Unit tests: invite preview never leaks tokens or participant identities
     - _Requirements: R4.2, R4.3_
 
-  - [ ] 5.15 Checkpoint
+  - [x] 5.15 Checkpoint
     - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 6. Implement Wallet module
-  - [ ] 6.1 `WalletService.getOrCreate(userId, currency)` and `computeBalance(walletId, tx)`
+- [x] 6. Implement Wallet module
+  - [x] 6.1 `WalletService.getOrCreate(userId, currency)` and `computeBalance(walletId, tx)`
     - Signed sum over `WalletLedgerEntry`; uses index `(wallet_id, created_at DESC)`.
     - _Requirements: R14.3, R14.6_
 
-  - [ ] 6.2 `WalletService.getAvailableBalance(walletId, tx)`
+  - [x] 6.2 `WalletService.getAvailableBalance(walletId, tx)`
     - Acquires `SELECT ... FOR UPDATE` on `Wallet` row; subtracts pending withdrawal amounts.
     - _Requirements: R15.6, design "Available-balance derivation"_
 
-  - [ ] 6.3 `WalletService.payDealFromWallet(deal, buyer)` — atomic wallet payment
+  - [x] 6.3 `WalletService.payDealFromWallet(deal, buyer)` — atomic wallet payment
     - Single `$transaction`; lock buyer + escrow wallets in id-ASC order; insert two `ESCROW_RECEIVED` ledger rows; transition `READY_FOR_PAYMENT → PAID_ESCROWED → SELLER_PREPARING`; write audit row.
     - Reject `wallet.insufficient_balance`, `wallet.currency_mismatch`, `wallet.invalid_deal_state`, `auth.role_forbidden` per spec.
     - _Requirements: R9.1–R9.9, R14.4, R14.5, R20.2_
 
-  - [ ] 6.4 `WalletService.settleEscrowFromKhqr(deal, externalRef, tx)`
+  - [x] 6.4 `WalletService.settleEscrowFromKhqr(deal, externalRef, tx)`
     - Insert `ESCROW_RECEIVED` credit on escrow wallet; transition to `PAID_ESCROWED → SELLER_PREPARING` in same tx.
     - _Requirements: R11.2, R11.4, R11.8_
 
-  - [ ] 6.5 `WalletService.autoReleaseToSeller(deal)` — atomic auto-release
+  - [x] 6.5 `WalletService.autoReleaseToSeller(deal)` — atomic auto-release
     - Lock escrow + seller wallets; debit escrow + credit seller (`SELLER_PAYOUT_*`); transition `RELEASE_PENDING → RELEASED`; audit; outbox `PAYOUT_RELEASED`.
     - On any failure, leave status at `RELEASE_PENDING` and emit `ADMIN_RELEASE_FAILED` admin alert.
     - _Requirements: R13.3, R13.5, R13.6, R20.2_
 
-  - [ ] 6.6 Wallet controller
+  - [x] 6.6 Wallet controller
     - `GET /v1/wallet/me`, `GET /v1/wallet/me/ledger?currency&cursor&limit` (cursor on `(created_at, id)`, max 200).
     - _Requirements: R14.1, R14.3, R15.6_
 
-  - [ ] 6.7 Property test: `computeBalance` signed-sum invariant
+  - [x] 6.7 Property test: `computeBalance` signed-sum invariant
     - **Property: balance equals signed sum** — for any random sequence of credit/debit entries, `computeBalance === Σ(direction === 'credit' ? amount : -amount)`.
     - **Validates: R14.3**
 
-  - [ ] 6.8 Property test: atomicity (no orphan ledger rows)
+  - [x] 6.8 Property test: atomicity (no orphan ledger rows)
     - Using Postgres testcontainer, inject failure between debit and credit; assert wallet rows unchanged after rollback.
     - **Property: all-or-nothing** — for any `payDealFromWallet` invocation that throws, `computeBalance` of buyer/escrow is unchanged.
     - **Validates: R9.8, R9.9, R14.4, R14.5**
 
-  - [ ] 6.9 Unit tests: currency mismatch and insufficient balance error envelopes
+  - [x] 6.9 Unit tests: currency mismatch and insufficient balance error envelopes
     - _Requirements: R9.3, R9.6_
 
-- [ ] 7. Implement Payment + KHQR module
-  - [ ] 7.1 `KhqrGenerator.generate(input)`
+- [x] 7. Implement Payment + KHQR module
+  - [x] 7.1 `KhqrGenerator.generate(input)`
     - Build TLV KHQR string per Bakong spec; PNG ≥ 256×256; cache `khqr_payload_meta` on `DealRoom`.
     - On generator failure: return `payment.khqr_unavailable`, leave status at `READY_FOR_PAYMENT`.
     - _Requirements: R10.1, R10.2, R10.8_
 
-  - [ ] 7.2 `Reference_Note` allocator (Crockford base32, 16 chars, UNIQUE on `deal_room.reference_note`)
+  - [x] 7.2 `Reference_Note` allocator (Crockford base32, 16 chars, UNIQUE on `deal_room.reference_note`)
     - Retry on unique-violation up to 5 times.
     - _Requirements: R10.1_
 
-  - [ ] 7.3 `KhqrVerifier` polling loop
+  - [x] 7.3 `KhqrVerifier` polling loop
     - Poll Bakong every 10 s; up to 60 s total or 3 retries; match on `Reference_Note + amount + currency`.
     - On match, call `WalletService.settleEscrowFromKhqr` inside a tx.
     - On timeout/no-match, emit `PAYMENT_PROOF_UPLOADED` to admin queue.
     - _Requirements: R11.1, R11.2, R11.3_
 
-  - [ ] 7.4 `POST /v1/deals/:publicId/payment/wallet`
+  - [x] 7.4 `POST /v1/deals/:publicId/payment/wallet`
     - Buyer-only; delegates to `WalletService.payDealFromWallet`.
     - _Requirements: R9.1–R9.9_
 
-  - [ ] 7.5 `POST /v1/deals/:publicId/payment/khqr`
+  - [x] 7.5 `POST /v1/deals/:publicId/payment/khqr`
     - Returns `{ khqr_string, khqr_image_url, reference_note, amount_due, currency, receiver_name, bakong_account_id }` within 3 s.
     - _Requirements: R10.1, R10.2, R10.3, R10.8_
 
-  - [ ] 7.6 `POST /v1/deals/:publicId/payment/khqr/receipt`
+  - [x] 7.6 `POST /v1/deals/:publicId/payment/khqr/receipt`
     - Idempotent (`Idempotency-Key`); accept `paid_amount?`, `buyer_note?`, `attachment_key?`; require at least one of `paid_amount` or `attachment_key`.
     - Transition to `PAYMENT_PENDING_VERIFICATION`.
     - _Requirements: R10.4, R10.5_
 
-  - [ ] 7.7 Admin verify/reject payment proof endpoints
+  - [x] 7.7 Admin verify/reject payment proof endpoints
     - `POST /v1/admin/payment-proofs/:id/verify`: write `ESCROW_RECEIVED`, set `PAID_ESCROWED → SELLER_PREPARING` in same tx.
     - `POST /v1/admin/payment-proofs/:id/reject`: 1–500 char reason; revert to `READY_FOR_PAYMENT`; emit `PAYMENT_REJECTED`.
     - _Requirements: R11.4, R11.5, R11.6, R11.7, R11.8, R20.3_
 
-  - [ ] 7.8 Property test: `Reference_Note` format and uniqueness
+  - [x] 7.8 Property test: `Reference_Note` format and uniqueness
     - **Property: format** — every generated note is 16 Crockford-base32 chars; rejection of `I/L/O/U`.
     - **Property: collision-free** — 100k generated notes have no duplicates.
     - **Validates: R10.1**
 
-  - [ ] 7.9 Unit tests: KHQR receipt validation (size, MIME)
+  - [x] 7.9 Unit tests: KHQR receipt validation (size, MIME)
     - _Requirements: R10.5, R10.6, R10.7_
 
-- [ ] 8. Implement Shipping, Confirmation, and Dispute modules
-  - [ ] 8.1 `POST /v1/deals/:publicId/shipping-proofs`
+- [x] 8. Implement Shipping, Confirmation, and Dispute modules
+  - [x] 8.1 `POST /v1/deals/:publicId/shipping-proofs`
     - Seller-only; require at least one of `delivery_company`, `tracking_number`, `package_photo`, `delivery_receipt`.
     - Transition `SELLER_PREPARING → SHIPPED`; emit `SHIPPING_UPLOADED`.
     - _Requirements: R12.1–R12.7_
 
-  - [ ] 8.2 `POST /v1/deals/:publicId/confirm-received` (idempotent)
+  - [x] 8.2 `POST /v1/deals/:publicId/confirm-received` (idempotent)
     - Buyer-only; transition `SHIPPED → RELEASE_PENDING` exactly once; trigger `WalletService.autoReleaseToSeller`.
     - _Requirements: R13.1, R13.2, R13.4, R13.5, R13.7_
 
-  - [ ] 8.3 `POST /v1/deals/:publicId/disputes`
+  - [x] 8.3 `POST /v1/deals/:publicId/disputes`
     - Reason ∈ {`ITEM_NOT_RECEIVED`, `WRONG_ITEM`, `DAMAGED_ITEM`, `FAKE_ITEM`, `PAYMENT_PROBLEM`, `OTHER`}; message 10–2000 chars.
     - Reject if active dispute already exists (partial unique index).
     - Transition to `DISPUTED`; emit `DISPUTE_OPENED` to admin + both participants.
     - _Requirements: R17.1–R17.6, R17.9_
 
-  - [ ] 8.4 `POST /v1/admin/deals/:id/release` (dispute resolution → release)
+  - [x] 8.4 `POST /v1/admin/deals/:id/release` (dispute resolution → release)
     - Single tx: credit seller, write payout ledger entries, transition `DISPUTED → RELEASED`, audit.
     - _Requirements: R17.7, R20.3_
 
-  - [ ] 8.5 `POST /v1/admin/deals/:id/refund` (dispute resolution → refund)
+  - [x] 8.5 `POST /v1/admin/deals/:id/refund` (dispute resolution → refund)
     - Single tx: credit buyer, write refund ledger entries, transition `DISPUTED → REFUNDED`, audit; emit `REFUND_COMPLETED`.
     - _Requirements: R17.8, R19.7, R20.3_
 
-  - [ ] 8.6 Property test: confirm-received idempotency
+  - [x] 8.6 Property test: confirm-received idempotency
     - **Property: idempotent confirm** — for any sequence of `(idempotency_key, ...)` calls, `RELEASE_PENDING` set exactly once and ledger rows generated exactly once.
     - **Validates: R13.2**
 
-  - [ ] 8.7 Unit tests: dispute reason allow-list and message bounds
+  - [x] 8.7 Unit tests: dispute reason allow-list and message bounds
     - _Requirements: R17.2, R17.4_
 
-- [ ] 9. Implement Withdrawal module + Admin review endpoints
-  - [ ] 9.1 `WithdrawalService.create` with hold
+- [x] 9. Implement Withdrawal module + Admin review endpoints
+  - [x] 9.1 `WithdrawalService.create` with hold
     - Single tx: assert `available_balance ≥ amount`; insert `WithdrawalRequest(status=pending_admin_review)`; insert `SELLER_PAYOUT_PENDING` ledger entry; audit `WITHDRAWAL_HOLD`; outbox `WITHDRAWAL_REQUESTED`.
     - _Requirements: R15.1–R15.9, R20.2_
 
-  - [ ] 9.2 Seller-side withdrawal endpoints
+  - [x] 9.2 Seller-side withdrawal endpoints
     - `POST /v1/withdrawals`, `GET /v1/withdrawals/me`, `GET /v1/withdrawals/:id` (owner only).
     - _Requirements: R15.1–R15.9_
 
-  - [ ] 9.3 Admin withdrawal listing + detail
+  - [x] 9.3 Admin withdrawal listing + detail
     - `GET /v1/admin/withdrawals?status&cursor&limit` (≤50/page); `GET /v1/admin/withdrawals/:id`.
     - _Requirements: R16.1, R16.6_
 
-  - [ ] 9.4 `POST /v1/admin/withdrawals/:id/approve` (idempotent)
+  - [x] 9.4 `POST /v1/admin/withdrawals/:id/approve` (idempotent)
     - Status must be `pending_admin_review`. Single tx: write `SELLER_PAYOUT_SENT`, set `paid`, store `payout_reference` + `admin_note`, audit `WITHDRAWAL_PAYOUT`, outbox `WITHDRAWAL_PAID`.
     - _Requirements: R16.2, R16.4, R16.5, R16.7, R20.3_
 
-  - [ ] 9.5 `POST /v1/admin/withdrawals/:id/reject` (idempotent)
+  - [x] 9.5 `POST /v1/admin/withdrawals/:id/reject` (idempotent)
     - Status must be `pending_admin_review`. Single tx: write compensating `ADJUSTMENT` credit equal to held amount, set `rejected`, store reason, audit, outbox `WITHDRAWAL_REJECTED`.
     - _Requirements: R16.3, R16.4, R16.5, R16.7, R20.3_
 
-  - [ ] 9.6 `AuthGuard` + `AdminGuard` enforcement on all withdrawal review endpoints
+  - [x] 9.6 `AuthGuard` + `AdminGuard` enforcement on all withdrawal review endpoints
     - Non-admin → `auth.admin_required`; never write audit for rejected attempt.
     - _Requirements: R16.6, R16.8_
 
-  - [ ] 9.7 Property test: available-balance invariant under concurrent withdrawals
+  - [x] 9.7 Property test: available-balance invariant under concurrent withdrawals
     - **Property: no over-withdrawal** — for any sequence of approve/reject and create-withdrawal operations, `available_balance ≥ 0` at every step; sum of pending holds never exceeds wallet balance.
     - **Validates: R15.6, R15.8, R16.2, R16.3**
 
-  - [ ] 9.8 Unit tests: KHQR vs bank destination field validation
+  - [x] 9.8 Unit tests: KHQR vs bank destination field validation
     - _Requirements: R15.3, R15.4, R15.5, R15.7_
 
-- [ ] 10. Implement Notification module with outbox pattern
-  - [ ] 10.1 `NotificationOutboxService.enqueue(event, recipients, tx)`
+- [x] 10. Implement Notification module with outbox pattern
+  - [x] 10.1 `NotificationOutboxService.enqueue(event, recipients, tx)`
     - Insert `NotificationOutboxEntry(status=pending)` in caller's tx; never throw on enqueue.
     - _Requirements: R19.11_
 
-  - [ ] 10.2 `NotificationDispatcher` drainer (`@Cron('* * * * * *')` 1 s)
+  - [x] 10.2 `NotificationDispatcher` drainer (`@Cron('* * * * * *')` 1 s)
     - Batch size 50; mark `sent`/`failed`; exponential backoff (1m → 2m → 4m → 8m → 15m, 5 retries).
     - _Requirements: R19.10, R19.11, design "Outbox pattern"_
 
-  - [ ] 10.3 `InAppAdapter` — write timeline rows; `AdminQueueAdapter` — admin queue.
+  - [x] 10.3 `InAppAdapter` — write timeline rows; `AdminQueueAdapter` — admin queue.
     - _Requirements: R19.8, R19.9, R11.3, R15.9_
 
-  - [ ] 10.4 `TelegramAdapter` (4 s timeout per call)
+  - [x] 10.4 `TelegramAdapter` (4 s timeout per call)
     - Resolves recipient `User` → `ExternalIdentity('telegram')`; sends message with `Open Deal Room` inline button.
     - _Requirements: R18.9, R19.1–R19.9_
 
-  - [ ] 10.5 Wire all notification events
+  - [x] 10.5 Wire all notification events
     - `COUNTERPARTY_JOINED`, `BOTH_APPROVED`, `PAYMENT_PROOF_UPLOADED`, `PAYMENT_VERIFIED`, `PAYMENT_REJECTED`, `SELLER_SHOULD_SHIP`, `SHIPPING_UPLOADED`, `BUYER_CONFIRMED`, `DISPUTE_OPENED`, `PAYOUT_RELEASED`, `REFUND_COMPLETED`, `WITHDRAWAL_REQUESTED`, `WITHDRAWAL_PAID`, `WITHDRAWAL_REJECTED`, `ADMIN_RELEASE_FAILED`.
     - Within-5 s budget verified by integration tests.
     - _Requirements: R8.5, R12.7, R13.5, R17.5, R19.1–R19.9_
 
-  - [ ] 10.6 Failure logging (does not roll back business state)
+  - [x] 10.6 Failure logging (does not roll back business state)
     - Structured `pino` log with `event_type`, `recipient_kind`, `recipient_id`, `deal_id|withdrawal_id`, `last_error`.
     - _Requirements: R19.10, R19.11_
 
-  - [ ] 10.7 Property test: outbox at-least-once delivery
+  - [x] 10.7 Property test: outbox at-least-once delivery
     - **Property: at-least-once** — every `enqueue` that commits eventually transitions to `sent` or hits the retry cap as `failed`; no row stays `pending` forever.
     - **Validates: R19.10, R19.11**
 
-  - [ ] 10.8 Unit tests: exponential backoff schedule
+  - [x] 10.8 Unit tests: exponential backoff schedule
     - _Requirements: R19.10_
 
-- [ ] 11. Implement Storage module on MinIO
-  - [ ] 11.1 MinIO client setup (`@aws-sdk/client-s3` against MinIO endpoint)
+- [x] 11. Implement Storage module on MinIO
+  - [x] 11.1 MinIO client setup (`@aws-sdk/client-s3` against MinIO endpoint)
     - Bucket bootstrap on startup; idempotent bucket create.
     - _Requirements: AGENTS.md "File Storage"_
 
-  - [ ] 11.2 `POST /v1/storage/uploads/sign`
+  - [x] 11.2 `POST /v1/storage/uploads/sign`
     - Pre-signed PUT, ≤15 min TTL; allowed `kind`: `payment_receipt`, `shipping`, `dispute`, `withdrawal_khqr`.
     - Returns `{ object_key, put_url, expires_at }`.
     - _Requirements: R10.6, R10.7, R12.4, R15.3_
 
-  - [ ] 11.3 Server-side post-upload validation
+  - [x] 11.3 Server-side post-upload validation
     - On reference (e.g., `attachment_key` in receipt body), HEAD object and verify MIME ∈ {`image/png`, `image/jpeg`, `application/pdf`} and size ≤ 10 MB; KHQR images cap 5 MB.
     - On violation: `storage.invalid_file`.
     - _Requirements: R10.6, R10.7, R12.4, R15.3_
 
-  - [ ] 11.4 Unit tests: MIME sniff + size cap
+  - [x] 11.4 Unit tests: MIME sniff + size cap
     - _Requirements: R10.7, R12.4_
 
-- [ ] 12. Implement Telegram bot module
-  - [ ] 12.1 Bot bootstrap (`telegraf` or `node-telegram-bot-api`)
+- [x] 12. Implement Telegram bot module
+  - [x] 12.1 Bot bootstrap (`telegraf` or `node-telegram-bot-api`)
     - Long-poll in dev; webhook in prod via `POST /v1/telegram/webhook` behind Nginx.
     - Read `TELEGRAM_BOT_TOKEN`; redact in pino logs.
     - _Requirements: R18.8_
 
-  - [ ] 12.2 `BotConversationService` (Postgres-backed FSM)
+  - [x] 12.2 `BotConversationService` (Postgres-backed FSM)
     - Upsert by `telegram_chat_id`; `state`, `partial_payload`, `retries`.
     - _Requirements: R18.2, R18.11, R18.13_
 
-  - [ ] 12.3 `/start`, `/help`, `/mydeals` handlers (≤3 s response)
+  - [x] 12.3 `/start`, `/help`, `/mydeals` handlers (≤3 s response)
     - `/mydeals` lists last N deals for the user (joined via `ExternalIdentity`).
     - _Requirements: R18.1_
 
-  - [ ] 12.4 `/newdeal` conversation flow
+  - [x] 12.4 `/newdeal` conversation flow
     - States: `ASK_ROLE → ASK_TITLE → ASK_AMOUNT → ASK_TYPE_SELLER|ASK_DESC_BUYER → ASK_DESC_SELLER → CREATE`.
     - Re-prompt on field validation failure with `bot.error.invalid_*`.
     - _Requirements: R18.2–R18.6, R18.12_
 
-  - [ ] 12.5 `BotDealCreator.createFromConversation` → `DealService.create` in-process
+  - [x] 12.5 `BotDealCreator.createFromConversation` → `DealService.create` in-process
     - Idempotency scope `tg_create`, key = `<chat_id>:<conversation_id>`.
     - Send Creator_Link and Invite_Link in two separate messages with `Open Deal Room` inline button.
     - _Requirements: R18.7, R18.9, R18.10_
 
-  - [ ] 12.6 Retry on `DealService.create` failure (≤3) without losing partial payload
+  - [x] 12.6 Retry on `DealService.create` failure (≤3) without losing partial payload
     - On 3rd failure, send `bot.error.deal_create_failed` and reset.
     - _Requirements: R18.11_
 
-  - [ ] 12.7 `/cancel` handler
+  - [x] 12.7 `/cancel` handler
     - Discard conversation row; return main menu.
     - _Requirements: R18.13_
 
-  - [ ] 12.8 Wire `TelegramAdapter` to bot for inbound notifications
+  - [x] 12.8 Wire `TelegramAdapter` to bot for inbound notifications
     - _Requirements: R18.9, R19.1–R19.9_
 
-  - [ ] 12.9 Property test: conversation FSM transitions
+  - [x] 12.9 Property test: conversation FSM transitions
     - **Property: FSM closure** — for any input sequence, the FSM only ever reaches states defined in design's bot diagram; `/cancel` from any non-terminal state ends the conversation.
     - **Validates: R18.2–R18.6, R18.12, R18.13**
 
-  - [ ] 12.10 Unit test: bot token never appears in logs or user messages
+  - [x] 12.10 Unit test: bot token never appears in logs or user messages
     - _Requirements: R18.8_
 
-- [ ] 13. Build frontend pages and components
-  - [ ] 13.1 Auth pages (`/auth/login`, `/auth/signup`)
+- [x] 13. Build frontend pages and components
+  - [x] 13.1 Auth pages (`/auth/login`, `/auth/signup`)
     - Email + password forms; Telegram login widget; Google Sign-In button.
     - On success, set `bs_session` cookie via API; redirect to `next` param.
     - _Requirements: R1.1, R1.4–R1.6, R1.8_
 
-  - [ ] 13.2 `/wallet` page (server component)
+  - [x] 13.2 `/wallet` page (server component)
     - `WalletBalanceCard` per currency; cursor-paginated `WalletLedgerList`.
     - _Requirements: R14.3, R15.6_
 
-  - [ ] 13.3 `/wallet/withdraw` page
+  - [x] 13.3 `/wallet/withdraw` page
     - `WithdrawalForm` with `khqr ↔ bank` toggle; client-side and server action validation.
     - _Requirements: R15.1–R15.5_
 
-  - [ ] 13.4 `/deals/new` page
+  - [x] 13.4 `/deals/new` page
     - Buyer/seller role tabs; required-field-only form; on success, show one-time creator/invite links with `bot.link.private_warning`.
     - _Requirements: R2.1–R2.9, R3.1–R3.6_
 
-  - [ ] 13.5 `/d/[publicId]` Deal Room base
+  - [x] 13.5 `/d/[publicId]` Deal Room base
     - Server fetch of `DealRoomResponse`; render `StatusBadge`, `DealStatusCard`, `ProductCard`, `ParticipantCard`, `PriceSummaryCard`, `EscrowExplanationCard`, `MissingFieldsChecklist`, `Timeline`.
     - Section edit forms gated by `allowed_actions`.
     - _Requirements: R5, R6.2, R6.3, R7.1–R7.7, R8.1–R8.7_
 
-  - [ ] 13.6 Invite preview / join state for `/d/[publicId]?invite=...`
+  - [x] 13.6 Invite preview / join state for `/d/[publicId]?invite=...`
     - Public preview from `/v1/deals/:publicId/invite-preview`; prompt sign-in to join.
     - _Requirements: R4.1–R4.6, R5.1–R5.10_
 
-  - [ ] 13.7 Payment surfaces (buyer side)
+  - [x] 13.7 Payment surfaces (buyer side)
     - `PrimaryActionBar` shows `Pay from wallet` (if `pay_from_wallet ∈ allowed_actions`) and `Pay with KHQR`.
     - `KhqrPaymentPanel` (image, `Reference_Note`, deeplink), `KhqrVerificationStatus` polling `GET /v1/deals/:publicId` every 5 s up to 70 s.
     - _Requirements: R9.1, R10.2, R10.3, R11.1_
 
-  - [ ] 13.8 Shipping, confirmation, and dispute components
+  - [x] 13.8 Shipping, confirmation, and dispute components
     - `submit_shipping_proof` form (seller); `confirm_received` / `open_dispute` buttons (buyer); `DisputeForm` with reason select + message + evidence upload.
     - _Requirements: R12.1, R13.1, R17.1–R17.4_
 
-  - [ ] 13.9 Admin login + admin routes guard
+  - [x] 13.9 Admin login + admin routes guard
     - `/admin/login`; server-side admin session check on all `/admin/*` routes.
     - _Requirements: R16.6, R16.8_
 
-  - [ ] 13.10 Admin withdrawals queue + detail
+  - [x] 13.10 Admin withdrawals queue + detail
     - `AdminWithdrawalTable` with status filter and pagination; `AdminWithdrawalDetail` with approve/reject inline forms (idempotency key in header).
     - _Requirements: R16.1–R16.5, R16.7_
 
-  - [ ] 13.11 Admin deals + payment-proof viewer + dispute resolution panel
+  - [x] 13.11 Admin deals + payment-proof viewer + dispute resolution panel
     - Existing `AdminDealTable`, `AdminDealFilters`, `PaymentProofViewer`, `ShippingProofViewer`, `DisputeEvidenceViewer`, `AdminActionPanel`, `AdminNoteBox`.
     - _Requirements: R11.4–R11.7, R17.7, R17.8_
 
-  - [ ] 13.12 i18n setup (`next-intl`) with `km`, `en`, `zh` and `LanguageSwitcher`
+  - [x] 13.12 i18n setup (`next-intl`) with `km`, `en`, `zh` and `LanguageSwitcher`
     - Wire all keys from `auth.*`, `deal.*`, `payment.*`, `shipping.*`, `confirmation.*`, `dispute.*`, `wallet.*`, `withdrawal.*`, `admin.*`, `bot.*`.
     - _Requirements: AGENTS.md "i18n Key Structure"_
 
-  - [ ] 13.13 Mobile-first styling and 44 px tap targets
+  - [x] 13.13 Mobile-first styling and 44 px tap targets
     - Sticky `PrimaryActionBar`; verify Tailwind class baseline.
     - _Requirements: AGENTS.md "Frontend Coding Rules"_
 
-  - [ ] 13.14 Token-handling guardrails
+  - [x] 13.14 Token-handling guardrails
     - Raw access tokens shown exactly once; never logged to `console.log`; never exposed to buyer view of seller payout KHQR.
     - _Requirements: R2.9, R5.8, AGENTS.md "Frontend Coding Rules"_
 
-  - [ ] 13.15 Component unit tests for `MissingFieldsChecklist`, `KhqrPaymentPanel`, `WithdrawalForm`
+  - [x] 13.15 Component unit tests for `MissingFieldsChecklist`, `KhqrPaymentPanel`, `WithdrawalForm`
     - _Requirements: R6.2, R10.2, R15.3, R15.4_
 
-- [ ] 14. Cross-cutting property and integration test pass
-  - [ ] 14.1 Property test: deal state machine end-to-end invariants
+- [x] 14. Cross-cutting property and integration test pass
+  - [x] 14.1 Property test: deal state machine end-to-end invariants
     - **Property: monotonic terminal states** — once `RELEASED`/`REFUNDED`/`CANCELLED`/`EXPIRED`, no further transition succeeds.
     - **Property: tx atomicity per transition** — each `transition` either commits both the status change and the audit row or commits neither.
     - **Validates: R20.1, R20.4, design state diagram**
 
-  - [ ] 14.2 Property test: total wallet conservation across auto-release
+  - [x] 14.2 Property test: total wallet conservation across auto-release
     - **Property: zero-sum** — `Δ(escrow) + Δ(seller) === 0` over `RELEASE_PENDING → RELEASED`.
     - **Validates: R13.3, R14.4**
 
-  - [ ] 14.3 Property test: withdrawal hold ↔ rejection compensation
+  - [x] 14.3 Property test: withdrawal hold ↔ rejection compensation
     - **Property: rejection cancels hold** — after `reject`, `available_balance` returns to value at the moment before the corresponding `create`.
     - **Validates: R15.8, R16.3**
 
-  - [ ] 14.4 Property test: idempotency middleware
+  - [x] 14.4 Property test: idempotency middleware
     - **Property: at-most-once side effect** — for any `(scope, key, user_id)`, repeated calls produce identical responses and exactly one persisted side effect.
     - **Validates: R13.2, R16.2, R16.3, R18.11**
 
-  - [ ] 14.5 Integration test suite via Postgres + MinIO testcontainers
+  - [x] 14.5 Integration test suite via Postgres + MinIO testcontainers
     - End-to-end: signup → create deal → join → approve → pay (wallet) → ship → confirm → release; assert audit and ledger rows.
     - End-to-end: KHQR path with mocked Bakong.
     - End-to-end: withdrawal request → admin approve.
     - End-to-end: dispute → admin refund.
     - _Requirements: R1–R20 (smoke coverage)_
 
-  - [ ] 14.6 Checkpoint
+  - [x] 14.6 Checkpoint
     - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 15. Deployment finalization
-  - [ ] 15.1 Production `Dockerfile` for backend (multi-stage)
+- [x] 15. Deployment finalization
+  - [x] 15.1 Production `Dockerfile` for backend (multi-stage)
     - Builder runs `prisma generate` + `npm run build`; runner uses non-root user.
     - _Requirements: design "Deployment Topology"_
 
-  - [ ] 15.2 Production `Dockerfile` for frontend (Next.js standalone output)
+  - [x] 15.2 Production `Dockerfile` for frontend (Next.js standalone output)
     - `next.config.ts` `output: 'standalone'`; copy `.next/standalone` + `static` + `public`.
     - _Requirements: design "Deployment Topology"_
 
-  - [ ] 15.3 Backend health endpoint `GET /v1/health`
+  - [x] 15.3 Backend health endpoint `GET /v1/health`
     - Returns `{ db: 'ok'|'fail', minio: 'ok'|'fail' }`; used by Docker healthcheck.
     - _Requirements: design "Observability → Healthchecks"_
 
-  - [ ] 15.4 One-shot `migrator` service in `docker-compose.yml`
+  - [x] 15.4 One-shot `migrator` service in `docker-compose.yml`
     - Runs `prisma migrate deploy` then exits; uses `migrator` Postgres role with DDL privileges.
     - _Requirements: design "Append-only enforcement"_
 
-  - [ ] 15.5 Postgres backup script
+  - [x] 15.5 Postgres backup script
     - Host cron entry; `pg_dump -Fc` nightly to `/var/bothsafe/backups/postgres/$(date +%F).dump`; 14-day retention.
     - _Requirements: design "Backups"_
 
-  - [ ] 15.6 TLS via Let's Encrypt
+  - [x] 15.6 TLS via Let's Encrypt
     - Certbot via webroot; renewal cron with deploy hook `docker compose exec nginx nginx -s reload`.
     - _Requirements: design "TLS"_
 
-  - [ ] 15.7 Pino logger redaction config
+  - [x] 15.7 Pino logger redaction config
     - Redact `password`, `password_hash`, `token`, `raw_*_token`, `Authorization`, `Cookie`, `TELEGRAM_BOT_TOKEN`, `*_secret`.
     - _Requirements: R1.9, R18.8, design "Cross-Cutting → Security → Logging"_
 
-  - [ ] 15.8 Final checkpoint
+  - [x] 15.8 Final checkpoint
     - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 16. Implement Binance Pay buyer payment (R21)
-  - [ ] 16.1 Add `BinanceOrder`, `BinanceOrderEvent` Prisma models and migration
+- [x] 16. Implement Binance Pay buyer payment (R21)
+  - [x] 16.1 Add `BinanceOrder`, `BinanceOrderEvent` Prisma models and migration
     - Native enum `binance_order_status` per design.
     - `BinanceOrder.merchant_trade_no UNIQUE`, `prepay_id UNIQUE`, `expire_time` ≤ now() + 30min.
     - `BinanceOrderEvent UNIQUE (prepay_id, event_type, nonce)` for webhook dedup.
     - _Requirements: R21.4, R21.11_
 
-  - [ ] 16.2 Extend `.env.example` and Joi env validation with `BINANCE_PAY_*`
+  - [x] 16.2 Extend `.env.example` and Joi env validation with `BINANCE_PAY_*`
     - Required: `BINANCE_PAY_BASE_URL`, `BINANCE_PAY_API_KEY`, `BINANCE_PAY_API_SECRET`, `BINANCE_PAY_WEBHOOK_BUYER_URL`, `BINANCE_PAY_WEBHOOK_PAYOUT_URL`. Optional: `BINANCE_PAY_SANDBOX` (default `true`).
     - Add same redaction entries to the Pino logger config (`BINANCE_PAY_API_SECRET`, `BinancePay-Signature`).
     - _Requirements: R21.13_
 
-  - [ ] 16.3 Implement `BinancePayClient` (`src/binance-pay/`)
+  - [x] 16.3 Implement `BinancePayClient` (`src/binance-pay/`)
     - `createOrder`, `queryOrder`, `payout`, `queryPayout` with HMAC-SHA512 signing.
     - 8s connect + 12s read timeout; 3 retries with exponential backoff (0.5/1/2s) only on 5xx and network errors; never on 4xx.
     - `BinancePayCertificateCache` — 1h TTL, refresh-ahead, fetched via `/binancepay/openapi/certificates` with a signed merchant request.
     - Strip `signature` and `secret` fields from responses before returning to callers.
     - _Requirements: R21.6, R22.5, design "Binance Pay request signing"_
 
-  - [ ] 16.4 Implement `BinancePaySignatureVerifier`
+  - [x] 16.4 Implement `BinancePaySignatureVerifier`
     - HMAC-SHA512 over `${timestamp}\n${nonce}\n${rawBody}\n` against merchant secret.
     - RSA-SHA256 verify of `BinancePay-Signature` against cert resolved from `BinancePay-Certificate-SN`.
     - Reject on missing headers, ±5min timestamp skew, hash mismatch, or unknown cert serial.
     - _Requirements: R21.6, R21.7, R22.7_
 
-  - [ ] 16.5 Implement `BinanceOrderService.createOrderForDeal`
+  - [x] 16.5 Implement `BinanceOrderService.createOrderForDeal`
     - Buyer-only; reject when deal Currency is KHR with `payment.binance_currency_unsupported`.
     - Idempotency scope `binance_create_order` keyed on deal id (prevents double-tap double orders).
     - Single tx: insert `BinanceOrder` row, transition `READY_FOR_PAYMENT → PAYMENT_PENDING_VERIFICATION`, write Audit_Log.
     - On Binance API failure after retries: leave Deal_Status at `READY_FOR_PAYMENT`, return `payment.binance_unavailable`, do NOT persist a `BinanceOrder` row.
     - _Requirements: R21.1, R21.2, R21.3, R21.4, R21.5_
 
-  - [ ] 16.6 Implement `BinanceWebhookService.handle` (POST `/v1/payment/binance/webhook`)
+  - [x] 16.6 Implement `BinanceWebhookService.handle` (POST `/v1/payment/binance/webhook`)
     - Verify signature → check timestamp skew → look up by `merchantTradeNo` → dedup on `(prepay_id, event_type, nonce)`.
     - On `PAY_SUCCESS` for `PENDING` order: single tx — set `BinanceOrder.status=PAID`, call `WalletService.settleEscrowFromBinance`, transition `PAYMENT_PENDING_VERIFICATION → PAID_ESCROWED → SELLER_PREPARING`, audit, outbox `PAYMENT_VERIFIED + SELLER_SHOULD_SHIP`.
     - On `PAY_SUCCESS` for already-`PAID` order: respond 200 `{ code: 'SUCCESS' }` no-op.
@@ -668,12 +668,12 @@ Convention for this file:
     - On signature/timestamp/lookup failure: respond HTTP 401 `{ code: 'FAIL' }` and log `prepayId`/cert SN/reason.
     - _Requirements: R21.6–R21.9, R21.11, R21.12_
 
-  - [ ] 16.7 Implement `WalletService.settleEscrowFromBinance` and `refundFromBinance`
+  - [x] 16.7 Implement `WalletService.settleEscrowFromBinance` and `refundFromBinance`
     - Same shape as `settleEscrowFromKhqr`: insert `ESCROW_RECEIVED` credit on escrow wallet inside the caller's tx; transition `PAID_ESCROWED → SELLER_PREPARING`.
     - `refundFromBinance`: insert `BUYER_REFUND_SENT` debit/credit pair, transition to `REFUNDED`.
     - _Requirements: R21.8, R21.12, R14.4_
 
-  - [ ] 16.8 Implement reconciliation processor `binance.reconcile.order`
+  - [x] 16.8 Implement reconciliation processor `binance.reconcile.order`
     - BullMQ cron job every 60s on Redis.
     - `SELECT ... FOR UPDATE SKIP LOCKED` over `BinanceOrder WHERE status='PENDING' AND created_at < now() - interval '60s' AND (last_polled_at IS NULL OR last_polled_at < now() - interval '60s') LIMIT 50`.
     - On `PAID` response: same single-tx settlement logic as the webhook handler.
@@ -681,71 +681,71 @@ Convention for this file:
     - Update `last_polled_at` on every poll.
     - _Requirements: R21.10_
 
-  - [ ] 16.9 Frontend: `Pay with Binance` panel on Deal Room
+  - [x] 16.9 Frontend: `Pay with Binance` panel on Deal Room
     - Add `pay_with_binance` to allowed-action rendering; on click POST `/v1/deals/:publicId/payment/binance` and show the returned `qrcode_link` (image), `deeplink`, and `universal_url` with copy buttons.
     - Poll `GET /v1/deals/:publicId/payment/binance/status` every 5s up to 5min for status changes.
     - Localised i18n keys under `payment.binance.*`.
     - _Requirements: R21.1, R21.2_
 
-  - [ ] 16.10 Property test: webhook idempotency*
+  - [x] 16.10 Property test: webhook idempotency*
     - **Property: at-most-once apply** — for any sequence of identical webhook deliveries (`prepay_id`, `event_type`, `nonce`), the ledger has exactly one `ESCROW_RECEIVED` row and Deal_Status reaches `SELLER_PREPARING` exactly once.
     - **Validates: R21.8, R21.9, R21.11**
 
-  - [ ] 16.11 Unit test: signature verifier rejection paths*
+  - [x] 16.11 Unit test: signature verifier rejection paths*
     - Stale timestamp, wrong HMAC, unknown cert SN, missing header — each returns HTTP 401 and writes no rows.
     - **Validates: R21.6, R21.7**
 
-  - [ ] 16.12 Integration test: Binance sandbox happy path*
+  - [x] 16.12 Integration test: Binance sandbox happy path*
     - Using recorded fixtures (since merchant approval pending), exercise create-order → webhook → reconciliation → query-order parity.
     - **Validates: R21.4, R21.8, R21.10**
 
-- [ ] 17. Implement Binance Pay seller withdrawal (R22)
-  - [ ] 17.1 Extend `WithdrawalRequest` schema with `binance_pay_id`, `binance_email`, `binance` enum value
+- [x] 17. Implement Binance Pay seller withdrawal (R22)
+  - [x] 17.1 Extend `WithdrawalRequest` schema with `binance_pay_id`, `binance_email`, `binance` enum value
     - Add `'binance'` to `withdrawal_destination` enum.
     - Add `BinancePayout` Prisma model with `binance_payout_status` enum.
     - Add CHECK constraint enforcing the destination-specific field requirements per design.
     - _Requirements: R22.1, R22.2, R22.4_
 
-  - [ ] 17.2 Extend `WithdrawalService.create` validation for `binance` destination
+  - [x] 17.2 Extend `WithdrawalService.create` validation for `binance` destination
     - Require exactly one of `binance_pay_id` (9–19 numeric) or `binance_email`.
     - Reject KHR with `withdrawal.invalid_field` (`{ field: 'currency' }`).
     - Hold logic stays identical (single tx, `SELLER_PAYOUT_PENDING`).
     - _Requirements: R22.1–R22.4_
 
-  - [ ] 17.3 Implement `BinancePayoutService.initiatePayout`
+  - [x] 17.3 Implement `BinancePayoutService.initiatePayout`
     - Called from `WithdrawalService.approve` when `destination_type='binance'`.
     - Build `merchantSendId = withdrawal.id` for outbound idempotency.
     - On `PROCESSING`/`SUCCESS` Binance response: single tx — write `SELLER_PAYOUT_SENT`, set `WithdrawalRequest.status='paid'`, persist `payout_reference = payoutTransactionId`, insert `BinancePayout` row, audit per R16.7.
     - On Binance API failure after retries: leave `pending_admin_review`, return `withdrawal.binance_payout_failed { error_code }`, do NOT write any ledger entry.
     - _Requirements: R22.5, R22.6_
 
-  - [ ] 17.4 Implement payout webhook (POST `/v1/withdrawal/binance/webhook`)
+  - [x] 17.4 Implement payout webhook (POST `/v1/withdrawal/binance/webhook`)
     - Same signature verification path as 16.4 / 16.6.
     - On verified `SUCCESS` for already-`paid` request: respond 200 no-op.
     - On verified `FAILED`: single tx — write compensating `ADJUSTMENT` credit equal to held amount, set `WithdrawalRequest.status='rejected'` reason `binance_payout_failed`, audit, outbox seller notification.
     - _Requirements: R22.7_
 
-  - [ ] 17.5 Implement reconciliation processor `binance.reconcile.payout`
+  - [x] 17.5 Implement reconciliation processor `binance.reconcile.payout`
     - BullMQ cron every 60s.
     - Polls `BinancePayout WHERE status IN ('PENDING','PROCESSING')` with `FOR UPDATE SKIP LOCKED`.
     - Calls `BinancePayClient.queryPayout`. On terminal status, applies the same logic as the payout webhook handler.
     - _Requirements: R22.8_
 
-  - [ ] 17.6 Admin guard on payout API call
+  - [x] 17.6 Admin guard on payout API call
     - Only `WithdrawalService.approve` may call `BinancePayoutService.initiatePayout`. The route is admin-gated already; add a service-level check that the caller's `User.is_admin` is true and audit any rejected attempt for the existing audit table without writing a ledger entry.
     - _Requirements: R22.9_
 
-  - [ ] 17.7 Frontend: extend `WithdrawalForm` with `binance` destination toggle
+  - [x] 17.7 Frontend: extend `WithdrawalForm` with `binance` destination toggle
     - Tabs: `KHQR`, `Bank`, `Binance`. Binance tab shows two mutually-exclusive inputs `Binance Pay ID` (numeric, 9–19) and `Email`.
     - Hide KHR option when Binance tab is active.
     - i18n keys under `withdrawal.binance.*`.
     - _Requirements: R22.1, R22.2, R22.3_
 
-  - [ ] 17.8 Property test: payout reconciliation idempotency*
+  - [x] 17.8 Property test: payout reconciliation idempotency*
     - **Property: at-most-once payout settlement** — repeated `SUCCESS` callbacks and reconciliation hits never produce a second `SELLER_PAYOUT_SENT` ledger row.
     - **Validates: R22.5, R22.7, R22.8**
 
-  - [ ] 17.9 Integration test: payout failure compensation*
+  - [x] 17.9 Integration test: payout failure compensation*
     - Mock Binance `FAILED` callback; assert ledger holds zero net change, `WithdrawalRequest` ends `rejected`, seller available_balance returns to pre-create value.
     - **Validates: R22.7, R15.8**
 

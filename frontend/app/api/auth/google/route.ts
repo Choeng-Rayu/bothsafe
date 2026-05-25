@@ -7,10 +7,16 @@ const API_BASE =
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const upstream = await fetch(`${API_BASE}/v1/auth/email/login`, {
+  if (!body?.id_token || typeof body.id_token !== "string") {
+    return NextResponse.json(
+      { message: "errors.auth.invalid_signup_data" },
+      { status: 400 },
+    );
+  }
+  const upstream = await fetch(`${API_BASE}/v1/auth/google`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ id_token: body.id_token }),
   });
   const data = await upstream.json().catch(() => ({}));
   const response = NextResponse.json(data, { status: upstream.status });

@@ -74,6 +74,7 @@ import { ApprovalService } from './approval.service';
 import { DealSectionPatchService } from './deal-section-patch.service';
 import { computeMissingFields } from './deal.missing-fields';
 import { DealService } from './deal.service';
+import { CreateDealDto } from './dto/create-deal.dto';
 import { JoinDealDto } from './dto/join-deal.dto';
 import { PatchDeliveryDto } from './dto/patch-delivery.dto';
 import { PatchParticipantDto } from './dto/patch-participant.dto';
@@ -125,11 +126,22 @@ export interface JoinDealResponse extends DealRoomResponse {
 }
 
 /**
+ * Response shape for `POST /v1/deals` — the creator-only return envelope
+ * carries the raw creator-access token and raw invite token alongside
+ * the standard `DealRoomResponse`. Both raw values appear exactly once
+ * (R2.9 / R3.6) and MUST be persisted client-side immediately.
+ */
+export interface CreateDealResponse extends DealRoomResponse {
+  raw_creator_access_token: string;
+  raw_invite_token: string;
+}
+
+/**
  * Deal Room controller. All routes live under the global `/v1` prefix
  * configured in `main.ts` plus the controller-level `/deals` segment,
  * giving us paths like `/v1/deals/:publicId/approval`.
  */
-@Controller('v1/deals')
+@Controller('deals')
 export class DealController {
   constructor(
     private readonly dealService: DealService,
@@ -152,6 +164,64 @@ export class DealController {
     // shape as `/join` and `/approval`.
     private readonly sectionPatchService: DealSectionPatchService,
   ) {}
+
+  // task 5.2
+  /**
+   * `POST /v1/deals`
+   *
+   * Creator-only deal-room creation (R2 + R3). Authenticated user
+   * becomes the first `DealParticipant` in `creator_role`; the deal
+   * row transitions `DRAFT → AWAITING_COUNTERPARTY` inside the same
+   * transaction (R2.7 / R3.5). Raw `creator_access_token` and raw
+   * `invite_token` are surfaced exactly once on the response — only
+   * SHA-256 hashes persist (R2.9 / R3.6).
+   *
+   * Errors:
+   *   - 400 `errors.deal.invalid_field` — DTO-level validation miss.
+   *   - 422 `deal.missing_required_fields` — role-specific required
+   *     field absent (R2.3 / R3.3).
+   *
+   * Requirements: R2.1–R2.9, R3.1–R3.6, R20.4.
+   */
+  @UseGuards(AuthGuard)
+  @Post()
+  @HttpCode(HttpStatus.OK)
+  async create(
+    @Body() dto: CreateDealDto,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ): Promise<CreateDealResponse> {
+    const result = await this.dealService.create({
+      creatorUserId: currentUser.id,
+      creatorRole: dto.creator_role,
+      creatorSource: dto.creator_source,
+      sections: {
+        product_title: dto.product_title,
+        product_type: dto.product_type,
+        product_description: dto.product_description,
+        quantity: dto.quantity,
+        condition: dto.condition,
+        deal_amount: dto.deal_amount,
+        currency: dto.currency,
+        buyer_name: dto.buyer_name,
+        seller_name: dto.seller_name,
+        phone: dto.phone,
+        preferred_lang: dto.preferred_lang,
+      },
+    });
+
+    const missingFields = computeMissingFields(result.deal);
+    const allowedActions = this.dealService.computeAllowedActions(result.deal, {
+      user_id: currentUser.id,
+      role: dto.creator_role,
+      hasApproved: false,
+    });
+
+    return {
+      ...buildDealRoomResponse(result.deal, missingFields, allowedActions),
+      raw_creator_access_token: result.rawCreatorAccessToken,
+      raw_invite_token: result.rawInviteToken,
+    };
+  }
 
   // task 5.8
   /**

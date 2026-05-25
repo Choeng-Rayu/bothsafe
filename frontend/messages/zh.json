@@ -25,7 +25,9 @@
     "logout_cta": "退出登录",
     "or_continue_with": "或使用以下方式继续",
     "continue_with_telegram": "使用 Telegram 继续",
-    "continue_with_google": "使用 Google 继续"
+    "continue_with_google": "使用 Google 继续",
+    "google_unavailable": "Google 登录暂未配置。",
+    "telegram_signing_in": "正在使用 Telegram 登录..."
   },
   "deal": {
     "create": {
@@ -188,7 +190,9 @@
       "invalid_credentials": "邮箱或密码错误。",
       "rate_limited": "尝试次数过多。请稍后再试。",
       "role_forbidden": "您无权对此交易执行该操作。",
-      "admin_required": "此操作需要管理员权限。"
+      "admin_required": "此操作需要管理员权限。",
+      "google_failed": "Google 登录失败，请重试。",
+      "telegram_failed": "Telegram 登录失败，请重试。"
     },
     "deal": {
       "missing_required_fields": "仍有必填字段未填写。",

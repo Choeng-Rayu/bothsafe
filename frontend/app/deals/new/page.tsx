@@ -25,10 +25,11 @@ export default function NewDealPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          role,
+          creator_role: role,
           product_title: fd.get("product_title"),
-          deal_amount: Number(fd.get("deal_amount")),
+          deal_amount: fd.get("deal_amount"), // keep as string — DTO expects string
           currency: fd.get("currency") || "USD",
+          ...(role === "seller" ? { seller_name: fd.get("seller_name") || "" } : { buyer_name: fd.get("buyer_name") || "" }),
         }),
       });
       if (!res.ok) {
@@ -76,6 +77,10 @@ export default function NewDealPage() {
         </button>
       </div>
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <label>
+          <span className="text-sm font-medium">{role === "seller" ? t("deal.fields.seller_name") : t("deal.fields.buyer_name")}</span>
+          <input name={role === "seller" ? "seller_name" : "buyer_name"} required className="input-field mt-1" />
+        </label>
         <label>
           <span className="text-sm font-medium">{t("deal.fields.product_title")}</span>
           <input name="product_title" required className="input-field mt-1" />

@@ -43,8 +43,8 @@ export default async function DealRoomPage({
   // Set access token cookie if provided
   const cookieStore = await cookies();
   const headers: Record<string, string> = {};
-  const session = cookieStore.get("bs_session")?.value;
-  if (session) headers.Cookie = `bs_session=${session}`;
+  const session = cookieStore.get("bothsafe_session")?.value;
+  if (session) headers.Cookie = `bothsafe_session=${session}`;
   if (access) headers.Cookie = `bs_access=${access}`;
 
   let deal: DealRoom;

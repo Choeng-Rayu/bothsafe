@@ -2,6 +2,8 @@
 import { useTranslations } from "next-intl";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import GoogleSignInButton from "@/app/_components/GoogleSignInButton";
+import { TelegramLoginButton } from "@/app/_components/TelegramLoginButton";
 
 export default function LoginPage() {
   const t = useTranslations();
@@ -52,6 +54,18 @@ export default function LoginPage() {
             {loading ? t("common.loading") : t("auth.login_cta")}
           </button>
         </form>
+
+        <div className="my-6 flex items-center gap-3 text-xs uppercase text-gray-500">
+          <span className="h-px flex-1 bg-gray-300" />
+          {t("auth.or_continue_with")}
+          <span className="h-px flex-1 bg-gray-300" />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <GoogleSignInButton next={next} onError={setError} />
+          <TelegramLoginButton />
+        </div>
+
         <p className="mt-4 text-sm text-center">
           <a href="/auth/signup" className="underline">{t("auth.signup_cta")}</a>
         </p>

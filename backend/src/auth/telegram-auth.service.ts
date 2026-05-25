@@ -49,6 +49,11 @@ import {
   verifyTelegramInitData,
   type VerifiedTelegramInitData,
 } from './telegram-init-data';
+import {
+  verifyTelegramWidget,
+  type TelegramWidgetPayload,
+  type VerifiedTelegramWidgetUser,
+} from './telegram-widget';
 
 /**
  * Input to {@link TelegramAuthService.loginTelegram}. `ip` and
@@ -71,6 +76,17 @@ export interface LoginTelegramResult {
   rawSessionToken: string;
   /** Resolved `Session.expires_at`. Useful for the cookie's `Max-Age`. */
   sessionExpiresAt: Date;
+}
+
+/**
+ * Input to {@link TelegramAuthService.loginTelegramWidget} — the
+ * web Login Widget delivers a flat `{id, first_name, …, hash}` object
+ * rather than the URL-encoded `initData` blob.
+ */
+export interface LoginTelegramWidgetInput {
+  payload: TelegramWidgetPayload;
+  ip?: string | null;
+  userAgent?: string | null;
 }
 
 @Injectable()
@@ -106,28 +122,73 @@ export class TelegramAuthService {
     }
 
     if (!verified) {
-      // We cannot key the rate-limit bucket on a verified id (we don't have
-      // one), so we don't record an `AuthAttempt` for unverifiable blobs —
-      // the IP-bucketed `auth_signup` throttler in `AppModule` covers this
-      // case. Recording an attempt under a synthetic key would dilute the
-      // per-account window with garbage and risk locking out legitimate
-      // accounts via spoofed prefixes.
       throw DomainException.unauthorized('auth.invalid_credentials');
     }
 
-    const externalId = String(verified.user.id);
+    return this.upsertAndIssue(
+      {
+        id: verified.user.id,
+        first_name: verified.user.first_name,
+        last_name: verified.user.last_name,
+        username: verified.user.username,
+        language_code: verified.user.language_code,
+      },
+      { ip: input.ip ?? null, userAgent: input.userAgent ?? null },
+    );
+  }
+
+  /**
+   * Sign-in via Telegram Login Widget (web). Same upsert-and-issue
+   * path as `loginTelegram`, but the verifier uses the
+   * `secret = SHA256(bot_token)` scheme (not `WebAppData`).
+   */
+  async loginTelegramWidget(
+    input: LoginTelegramWidgetInput,
+  ): Promise<LoginTelegramResult> {
+    const botToken = this.config.get<string>('telegram.botToken');
+    if (typeof botToken !== 'string' || botToken.length === 0) {
+      this.logger.error(
+        'TELEGRAM_BOT_TOKEN is not configured; refusing Telegram widget login.',
+      );
+      throw DomainException.unauthorized('auth.invalid_credentials');
+    }
+
+    let verified: VerifiedTelegramWidgetUser | null;
+    try {
+      verified = verifyTelegramWidget(input.payload, botToken);
+    } catch {
+      verified = null;
+    }
+    if (!verified) {
+      throw DomainException.unauthorized('auth.invalid_credentials');
+    }
+
+    return this.upsertAndIssue(
+      {
+        id: verified.id,
+        first_name: verified.first_name,
+        last_name: verified.last_name,
+        username: verified.username,
+      },
+      { ip: input.ip ?? null, userAgent: input.userAgent ?? null },
+    );
+  }
+
+  private async upsertAndIssue(
+    telegram: {
+      id: number;
+      first_name?: string;
+      last_name?: string;
+      username?: string;
+      language_code?: string;
+    },
+    request: { ip: string | null; userAgent: string | null },
+  ): Promise<LoginTelegramResult> {
+    const externalId = String(telegram.id);
     const identityKey = `telegram:${externalId}`;
 
-    // ── Pre-verification rate limit (R1.7) ────────────────────────────────
-    // Now that we have a verified id, gate the bucket BEFORE issuing the
-    // session. We've already done the cryptographic check, but a
-    // distributed attacker could still grind `recordAttempt(..., true)`
-    // against a single account — and a successful login mid-window must
-    // not unlock a bucket that has already accumulated 5 failures. The
-    // limiter is the canonical R1.7 enforcement point.
     await this.authAttempts.assertNotLocked(identityKey);
 
-    // ── Upsert ExternalIdentity + User + Wallets in a single tx ───────────
     let user: User;
     try {
       user = await this.prisma.runInTransaction(async (tx) => {
@@ -145,9 +206,6 @@ export class TelegramAuthService {
         if (existing) {
           resolved = existing.user;
         } else {
-          // Derive a display_name from Telegram if available; fall back
-          // to the @username; otherwise leave null.
-          const telegram = verified.user;
           const displayName = pickDisplayName(telegram);
           const preferredLang = pickPreferredLang(telegram.language_code);
 
@@ -166,23 +224,13 @@ export class TelegramAuthService {
             },
           });
 
-          // Create per-currency wallets on first sign-in. We do NOT
-          // backfill `WalletRole` rows here — those mark platform-owned
-          // wallets (escrow / platform_fee), seeded by
-          // `prisma/seed.ts`. Regular user wallets have no `WalletRole`.
           for (const currency of ALL_CURRENCIES) {
             await tx.wallet.create({
-              data: {
-                user_id: resolved.id,
-                currency,
-              },
+              data: { user_id: resolved.id, currency },
             });
           }
         }
 
-        // R20.4 — audit row in the same tx as the business mutation.
-        // For repeat sign-ins we still record the audit row so the
-        // forensics timeline shows every authentication.
         await this.audit.record(
           {
             action_type: 'AUTH_LOGIN_TELEGRAM',
@@ -200,12 +248,12 @@ export class TelegramAuthService {
         return resolved;
       });
     } catch (error) {
-      // Any DB failure during the upsert is a real failure — record the
-      // attempt as failed (so it counts toward the lockout window) and
-      // surface a generic invalid_credentials envelope. We do NOT leak
-      // the underlying error.
       await this.authAttempts
-        .recordAttempt(identityKey, false, requestMeta(input))
+        .recordAttempt(
+          identityKey,
+          false,
+          requestMeta({ ip: request.ip, userAgent: request.userAgent }),
+        )
         .catch(() => undefined);
       this.logger.error(
         `Telegram login transaction failed for ${identityKey}: ${describeError(error)}`,
@@ -213,16 +261,15 @@ export class TelegramAuthService {
       throw DomainException.unauthorized('auth.invalid_credentials');
     }
 
-    // Record the successful attempt outside the tx — `AuthAttempt` is not
-    // append-only at the DB-role level, and recording inside the tx would
-    // tie the audit row's lifetime to the upsert's commit which we
-    // already audited via `AuditService`.
-    await this.authAttempts.recordAttempt(identityKey, true, requestMeta(input));
+    await this.authAttempts.recordAttempt(
+      identityKey,
+      true,
+      requestMeta({ ip: request.ip, userAgent: request.userAgent }),
+    );
 
-    // ── Issue session ────────────────────────────────────────────────────
     const issued = await this.sessions.issueSession(user.id, {
-      ip: input.ip ?? null,
-      userAgent: input.userAgent ?? null,
+      ip: request.ip,
+      userAgent: request.userAgent,
     });
 
     return {
@@ -237,7 +284,10 @@ export class TelegramAuthService {
 // File-private helpers.
 // -----------------------------------------------------------------------------
 
-function requestMeta(input: LoginTelegramInput): {
+function requestMeta(input: {
+  ip?: string | null;
+  userAgent?: string | null;
+}): {
   ip?: string;
   user_agent?: string;
 } {

@@ -17,9 +17,9 @@ interface AdminDeal {
 
 async function getDeal(dealId: string): Promise<AdminDeal | null> {
   const cookieStore = await cookies();
-  const session = cookieStore.get("bs_admin_session")?.value;
+  const session = cookieStore.get("bothsafe_admin_session")?.value;
   const res = await fetch(`${API_BASE}/v1/admin/deals/${dealId}`, {
-    headers: { Cookie: `bs_admin_session=${session}` },
+    headers: { Cookie: `bothsafe_admin_session=${session}` },
     cache: "no-store",
   });
   if (!res.ok) return null;

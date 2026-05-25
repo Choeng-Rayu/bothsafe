@@ -14,9 +14,9 @@ interface Withdrawal {
 
 async function getWithdrawals(): Promise<Withdrawal[]> {
   const cookieStore = await cookies();
-  const session = cookieStore.get("bs_admin_session")?.value;
+  const session = cookieStore.get("bothsafe_admin_session")?.value;
   const res = await fetch(`${API_BASE}/v1/admin/withdrawals?status=pending_admin_review`, {
-    headers: { Cookie: `bs_admin_session=${session}` },
+    headers: { Cookie: `bothsafe_admin_session=${session}` },
     cache: "no-store",
   });
   if (!res.ok) return [];

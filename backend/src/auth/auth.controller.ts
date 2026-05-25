@@ -84,6 +84,7 @@ import { EmailLoginDto } from './dto/email-login.dto';
 import { EmailSignupDto } from './dto/email-signup.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { TelegramLoginDto } from './dto/telegram-login.dto';
+import { TelegramWidgetDto } from './dto/telegram-widget.dto';
 import { GoogleAuthService } from './google-auth.service';
 import {
   clearSessionCookie,
@@ -231,6 +232,37 @@ export class AuthController {
   ): Promise<AuthResponse> {
     const result = await this.telegramAuth.loginTelegram({
       initData: dto.initData,
+      ip: extractIp(req),
+      userAgent: extractUserAgent(req),
+    });
+
+    setSessionCookie(res, result.rawSessionToken, {
+      maxAgeMs: this.sessions.sessionTtlMs,
+    });
+
+    return buildAuthResponse(result.user, result.sessionExpiresAt);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Telegram — Login Widget (web)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * `POST /v1/auth/telegram/widget` — sign in via Telegram Login Widget.
+   *
+   * Different from `POST /v1/auth/telegram` (Mini App `initData`). The
+   * web Login Widget uses `secret = SHA256(bot_token)` HMAC scheme.
+   */
+  @Throttle({ auth_signup: { limit: 5, ttl: 60_000 } })
+  @Post('telegram/widget')
+  @HttpCode(HttpStatus.OK)
+  async loginTelegramWidget(
+    @Body() dto: TelegramWidgetDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AuthResponse> {
+    const result = await this.telegramAuth.loginTelegramWidget({
+      payload: dto.payload,
       ip: extractIp(req),
       userAgent: extractUserAgent(req),
     });

@@ -43,7 +43,9 @@ export const envValidationSchema = Joi.object({
   // does not match this value.
   GOOGLE_CLIENT_ID: Joi.string().allow('').default(''),
 
-  ADMIN_BOOTSTRAP_EMAIL: Joi.string().email().required(),
+  ADMIN_BOOTSTRAP_EMAIL: Joi.string()
+    .email({ tlds: { allow: false } })
+    .required(),
 
   ADMIN_BOOTSTRAP_PASSWORD: Joi.string().min(8).required(),
 

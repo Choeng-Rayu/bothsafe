@@ -1,11 +1,15 @@
 "use client";
 import { useTranslations } from "next-intl";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
+import GoogleSignInButton from "@/app/_components/GoogleSignInButton";
+import { TelegramLoginButton } from "@/app/_components/TelegramLoginButton";
 
 export default function SignupPage() {
   const t = useTranslations();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const next = searchParams.get("next") || "/";
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -21,7 +25,7 @@ export default function SignupPage() {
         body: JSON.stringify({
           email: fd.get("email"),
           password: fd.get("password"),
-          display_name: fd.get("display_name"),
+          displayName: fd.get("displayName"),
         }),
       });
       if (!res.ok) {
@@ -29,7 +33,8 @@ export default function SignupPage() {
         setError(body.message || t("errors.auth.invalid_signup_data"));
         return;
       }
-      router.push("/auth/login");
+      router.push(next);
+      router.refresh();
     } finally {
       setLoading(false);
     }
@@ -42,7 +47,7 @@ export default function SignupPage() {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <label>
             <span className="text-sm font-medium">{t("auth.display_name_label")}</span>
-            <input name="display_name" type="text" required className="input-field mt-1" />
+            <input name="displayName" type="text" required className="input-field mt-1" />
           </label>
           <label>
             <span className="text-sm font-medium">{t("auth.email_label")}</span>
@@ -57,6 +62,18 @@ export default function SignupPage() {
             {loading ? t("common.loading") : t("auth.signup_cta")}
           </button>
         </form>
+
+        <div className="my-6 flex items-center gap-3 text-xs uppercase text-gray-500">
+          <span className="h-px flex-1 bg-gray-300" />
+          {t("auth.or_continue_with")}
+          <span className="h-px flex-1 bg-gray-300" />
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <GoogleSignInButton next={next} onError={setError} />
+          <TelegramLoginButton />
+        </div>
+
         <p className="mt-4 text-sm text-center">
           <a href="/auth/login" className="underline">{t("auth.login_cta")}</a>
         </p>

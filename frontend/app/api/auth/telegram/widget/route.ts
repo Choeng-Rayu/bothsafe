@@ -7,11 +7,20 @@ const API_BASE =
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const upstream = await fetch(`${API_BASE}/v1/auth/email/login`, {
+
+  if (!body.payload || typeof body.payload !== "object") {
+    return NextResponse.json(
+      { error: "errors.auth.invalid_request" },
+      { status: 400 }
+    );
+  }
+
+  const upstream = await fetch(`${API_BASE}/v1/auth/telegram/widget`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+
   const data = await upstream.json().catch(() => ({}));
   const response = NextResponse.json(data, { status: upstream.status });
   forwardSetCookie(upstream, response);
@@ -22,8 +31,8 @@ function forwardSetCookie(upstream: Response, response: NextResponse) {
   const cookies =
     typeof upstream.headers.getSetCookie === "function"
       ? upstream.headers.getSetCookie()
-      : (upstream.headers.get("set-cookie") ? [upstream.headers.get("set-cookie") as string] : []);
-  for (const cookie of cookies) {
-    response.headers.append("set-cookie", cookie);
-  }
+      : upstream.headers.get("set-cookie")
+        ? [upstream.headers.get("set-cookie") as string]
+        : [];
+  for (const cookie of cookies) response.headers.append("set-cookie", cookie);
 }

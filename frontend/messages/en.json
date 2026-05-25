@@ -25,7 +25,9 @@
     "logout_cta": "Sign out",
     "or_continue_with": "or continue with",
     "continue_with_telegram": "Continue with Telegram",
-    "continue_with_google": "Continue with Google"
+    "continue_with_google": "Continue with Google",
+    "google_unavailable": "Google sign-in is not configured.",
+    "telegram_signing_in": "Signing in with Telegram..."
   },
   "deal": {
     "create": {
@@ -188,7 +190,9 @@
       "invalid_credentials": "Email or password is incorrect.",
       "rate_limited": "Too many attempts. Try again in a few minutes.",
       "role_forbidden": "You can't perform this action on this deal.",
-      "admin_required": "Admin access is required for this action."
+      "admin_required": "Admin access is required for this action.",
+      "google_failed": "Google sign-in failed. Please try again.",
+      "telegram_failed": "Telegram sign-in failed. Please try again."
     },
     "deal": {
       "missing_required_fields": "Some required fields are still empty.",
