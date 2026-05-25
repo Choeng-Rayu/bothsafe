@@ -25,6 +25,14 @@ export default () => ({
     receiverAccountLabel: process.env.RECEIVER_ACCOUNT_LABEL ?? 'BothSafe Escrow',
   },
 
+  session: {
+    // Lifetime of an authenticated session (R1.2 = 24 h minimum). The env
+    // var is in days for operator ergonomics; SessionService converts to ms.
+    // Defaults to 1 day so unit tests / dev never silently inherit a longer
+    // window than R1.2 prescribes.
+    ttlDays: parseInt(process.env.SESSION_TTL_DAYS ?? '1', 10),
+  },
+
   cors: {
     origins: (process.env.CORS_ORIGINS ?? '')
       .split(',')
@@ -38,6 +46,14 @@ export default () => ({
     webhookUrl: process.env.TELEGRAM_WEBHOOK_URL,
     botUsername: process.env.TELEGRAM_BOT_USERNAME,
     botEnabled: process.env.TELEGRAM_BOT_ENABLED === 'true',
+  },
+
+  // Google OAuth — `GOOGLE_CLIENT_ID` is consumed by
+  // `verifyGoogleIdToken(idToken, audience)` (task 4.3). The verifier
+  // rejects any id_token whose `aud` claim does not match this value.
+  google: {
+    clientId: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
   },
 
   minio: {

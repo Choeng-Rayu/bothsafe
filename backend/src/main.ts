@@ -1,10 +1,21 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Forward SIGINT/SIGTERM into Nest's lifecycle so PrismaService.onModuleDestroy
+  // (and any other shutdown hooks) actually fire on container stop.
+  app.enableShutdownHooks();
+
+  // `cookie-parser` populates `req.cookies` so `SessionCookieMiddleware`
+  // (task 4.4) can read the `bothsafe_session` cookie. Mounted before any
+  // route-scoped or global Nest middleware so the parsed cookies are
+  // available everywhere downstream.
+  app.use(cookieParser());
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>('port') ?? 3000;

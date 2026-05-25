@@ -1,0 +1,1252 @@
+// BothSafe — Prisma schema
+//
+// Models, enums, and indexes are added incrementally by tasks 2.2–2.10
+// in `.kiro/specs/bothsafe-deal-flow/tasks.md`. This file currently
+// only configures the generator and the PostgreSQL datasource so that
+// later tasks have a stable foundation to build on.
+//
+// Connection URL is supplied by `../prisma.config.ts`; in Prisma 7 the
+// `url` field has been removed from the schema's `datasource` block.
+//
+// Role split — see `./README.md`:
+//   • DDL (`prisma migrate dev|deploy`) runs as the `migrator` role.
+//   • DML (the NestJS app via `@prisma/client`) runs as the `app` role,
+//     which has UPDATE/DELETE/TRUNCATE revoked on the append-only tables
+//     (`wallet_ledger_entry`, `audit_log_entry`) per design §"Append-only
+//     enforcement (R14.2, R20.5)".
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// -----------------------------------------------------------------------------
+// Enums — task 2.2
+//
+// Each Prisma enum maps one-to-one onto a native PostgreSQL `CREATE TYPE … AS
+// ENUM` (see design §"Postgres-level types and enums"). Prisma names use
+// PascalCase; the underlying Postgres type names are lowercase snake_case via
+// `@@map`. Member values match the design / `AGENTS.md` exactly.
+//
+// Binance-specific enums (`binance_order_status`, `binance_payout_status`) and
+// the `binance` value on `withdrawal_destination` are intentionally omitted
+// here; they are added later by task 16.1 / 17.1.
+// -----------------------------------------------------------------------------
+
+/// Canonical Deal Room lifecycle states. Source of truth: `AGENTS.md` →
+/// "Deal Status Enum". Mutated only via `DealService.transition` (R20.1).
+enum DealStatus {
+  DRAFT
+  AWAITING_COUNTERPARTY
+  AWAITING_BOTH_APPROVAL
+  READY_FOR_PAYMENT
+  PAYMENT_PENDING_VERIFICATION
+  PAID_ESCROWED
+  SELLER_PREPARING
+  SHIPPED
+  BUYER_CONFIRMED
+  DISPUTED
+  RELEASE_PENDING
+  RELEASED
+  REFUNDED
+  CANCELLED
+  EXPIRED
+
+  @@map("deal_status")
+}
+
+/// Supported deal / wallet currencies for the MVP (R2.1, R14.6).
+enum Currency {
+  USD
+  KHR
+
+  @@map("currency")
+}
+
+/// Role a participant plays in a deal. `admin` is reserved for platform users
+/// performing admin-gated actions; deal participants are `buyer` or `seller`.
+enum ParticipantRole {
+  buyer
+  seller
+  admin
+
+  @@map("participant_role")
+}
+
+/// Where a deal originated (R2.6, R3.4).
+enum CreatorSource {
+  web
+  telegram
+
+  @@map("creator_source")
+}
+
+/// Languages supported by the UI / bot (AGENTS.md → "Shared Conventions").
+enum PreferredLang {
+  km
+  en
+  zh
+
+  @@map("preferred_lang")
+}
+
+/// Lifecycle of a `WithdrawalRequest` (design §"Withdrawal request lifecycle";
+/// R15.8, R16.2, R16.3).
+enum WithdrawalStatus {
+  pending_admin_review
+  paid
+  rejected
+
+  @@map("withdrawal_status")
+}
+
+/// Destination type a seller chose for a withdrawal payout (R15.3–R15.5).
+/// `binance` is added later by task 17.1.
+enum WithdrawalDestination {
+  khqr
+  bank
+
+  @@map("withdrawal_destination")
+}
+
+/// Allowed reasons for opening a dispute (R17.2; AGENTS.md → "Dispute Reasons").
+enum DisputeReason {
+  ITEM_NOT_RECEIVED
+  WRONG_ITEM
+  DAMAGED_ITEM
+  FAKE_ITEM
+  PAYMENT_PROBLEM
+  OTHER
+
+  @@map("dispute_reason")
+}
+
+/// Append-only `WalletLedgerEntry` types (AGENTS.md → "Ledger Entry Types";
+/// R14.1, R14.2).
+enum LedgerEntryType {
+  ESCROW_RECEIVED
+  PLATFORM_FEE_RESERVED
+  SELLER_PAYOUT_PENDING
+  SELLER_PAYOUT_SENT
+  BUYER_REFUND_PENDING
+  BUYER_REFUND_SENT
+  ADJUSTMENT
+
+  @@map("ledger_entry_type")
+}
+
+/// Sign of a `WalletLedgerEntry`; balance = Σ(credit) − Σ(debit) (R14.3).
+enum LedgerDirection {
+  credit
+  debit
+
+  @@map("ledger_direction")
+}
+
+/// Notification events emitted to the outbox and dispatched by adapters
+/// (AGENTS.md → "Notification Events"; R19.1–R19.9).
+enum NotificationEvent {
+  COUNTERPARTY_JOINED
+  DEAL_UPDATED
+  BOTH_APPROVED
+  PAYMENT_PROOF_UPLOADED
+  PAYMENT_VERIFIED
+  PAYMENT_REJECTED
+  SELLER_SHOULD_SHIP
+  SHIPPING_UPLOADED
+  BUYER_CONFIRMED
+  DISPUTE_OPENED
+  PAYOUT_RELEASED
+  REFUND_COMPLETED
+  WITHDRAWAL_REQUESTED
+  WITHDRAWAL_PAID
+  WITHDRAWAL_REJECTED
+  ADMIN_RELEASE_FAILED
+
+  @@map("notification_event")
+}
+
+/// `NotificationOutboxEntry` lifecycle (R19.10, R19.11).
+enum OutboxStatus {
+  pending
+  sent
+  failed
+
+  @@map("outbox_status")
+}
+
+// -----------------------------------------------------------------------------
+// User and authentication — task 2.3
+//
+// Source of truth: design §"Data Models → User and authentication".
+// Acceptance criteria: R1.1, R1.2, R1.3, R1.4, R1.7, R1.9.
+//
+// Notes:
+//   • Primary keys use cuid v2 (`@default(cuid(2))`); cuid v2 sorts roughly by
+//     creation time, which keeps cursor-style pagination cheap on later
+//     listings.
+//   • `User.email` and `User.password_hash` are both nullable so a Telegram-
+//     only or Google-only user can exist before they ever set a local
+//     credential (R1.1, R1.3).
+//   • Sessions store only the SHA-256 of the cookie value in `token_hash`
+//     (R1.9). Raw tokens are never persisted.
+//   • `AuthAttempt` is the substrate for the sliding-window rate limiter
+//     (R1.7). The composite index `(identity_key, attempted_at)` makes the
+//     "≥5 fails in last 15 min?" query cheap.
+//   • These tables are not append-only at the DB-role level — only
+//     `wallet_ledger_entry` and `audit_log_entry` get the trigger-based
+//     enforcement (see task 2.10). Plain `@db.Timestamptz` (microsecond
+//     precision) is therefore sufficient here; ms precision is reserved
+//     for the audit/ledger tables.
+// -----------------------------------------------------------------------------
+
+/// Authenticated platform user. Backs every deal participant and every wallet.
+/// Sign-in providers (email/password, Telegram, Google) all converge on this
+/// record via `ExternalIdentity` (R1.1, R1.3).
+model User {
+  id             String        @id @default(cuid(2))
+  /// Nullable: a user authenticated only via Telegram or Google may not have
+  /// supplied an email yet. Unique when present (R1.1, R1.5).
+  email          String?       @unique
+  /// argon2id hash; null when the user has no email/password identity (R1.9).
+  /// Never logged, never returned in responses.
+  password_hash  String?
+  display_name   String?
+  preferred_lang PreferredLang @default(en)
+  is_admin       Boolean       @default(false)
+  created_at     DateTime      @default(now()) @db.Timestamptz
+  updated_at     DateTime      @updatedAt @db.Timestamptz
+
+  external_identities       ExternalIdentity[]
+  sessions                  Session[]
+  created_deal_rooms        DealRoom[]               @relation("DealRoomCreator")
+  deal_participations       DealParticipant[]
+  creator_access_tokens     CreatorAccessToken[]
+  participant_access_tokens ParticipantAccessToken[]
+  approvals                 Approval[]
+  payment_proofs            PaymentProof[]
+  shipping_proofs           ShippingProof[]
+  confirmations             Confirmation[]
+  opened_disputes           Dispute[]                @relation("DisputeOpener")
+  resolved_disputes         Dispute[]                @relation("DisputeResolver")
+  dispute_evidence          DisputeEvidence[]
+  wallets                   Wallet[]
+  created_withdrawals       WithdrawalRequest[]      @relation("WithdrawalSeller")
+  reviewed_withdrawals      WithdrawalRequest[]      @relation("WithdrawalReviewer")
+  audit_log_entries         AuditLogEntry[]
+  idempotency_keys          IdempotencyKey[]
+
+  @@map("user")
+}
+
+/// Link between a `User` and a third-party identity provider. The unique
+/// `(provider, external_id)` pair guarantees that a single Telegram chat or
+/// Google sub can never be linked to two different `User` rows (R1.3 dedup).
+model ExternalIdentity {
+  id          String   @id @default(cuid(2))
+  user_id     String
+  /// `'telegram'` or `'google'`. Stored as TEXT (not an enum) so future
+  /// providers can be added without a migration.
+  provider    String
+  /// Telegram chat id (numeric string) or Google `sub` claim.
+  external_id String
+  created_at  DateTime @default(now()) @db.Timestamptz
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([provider, external_id])
+  @@index([user_id])
+  @@map("external_identity")
+}
+
+/// Server-side session row. The cookie holds the raw lookup token; this row
+/// stores only its SHA-256 hash in `token_hash` (R1.9). Sessions expire 24 h
+/// after issuance (R1.2); `revoked_at` is set on explicit logout. The
+/// composite index on `(user_id, expires_at)` supports both "active sessions
+/// for this user" and the periodic expiry sweep.
+model Session {
+  id         String    @id @default(cuid(2))
+  user_id    String
+  /// SHA-256 (hex) of the raw cookie value. UNIQUE so a stolen-cookie replay
+  /// against a deleted/rotated session can't accidentally match another row.
+  token_hash String    @unique
+  /// `created_at + SESSION_TTL_DAYS` (default 24 h per R1.2).
+  expires_at DateTime  @db.Timestamptz
+  revoked_at DateTime? @db.Timestamptz
+  created_at DateTime  @default(now()) @db.Timestamptz
+  user_agent String?
+  /// Postgres `inet` column — supports both IPv4 and IPv6 (Prisma maps to String).
+  ip_inet    String?   @db.Inet
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, expires_at])
+  @@map("session")
+}
+
+/// One row per authentication attempt (success or failure). Powers the
+/// sliding-window rate limiter (R1.7): a request is denied when there are
+/// ≥ 5 failed attempts for the same `identity_key` in the last 15 minutes.
+/// `identity_key` is derived from the credential the caller offered, so
+/// the bucket is stable across IPs:
+///   • email login         → `email:<lowercased-email>`
+///   • Telegram login      → `tg:<external_id>`
+///   • Google login        → `google:<sub>`
+model AuthAttempt {
+  id           String   @id @default(cuid(2))
+  identity_key String
+  attempted_at DateTime @default(now()) @db.Timestamptz
+  success      Boolean
+
+  @@index([identity_key, attempted_at])
+  @@map("auth_attempt")
+}
+
+// -----------------------------------------------------------------------------
+// Deal Room and participants — task 2.4
+//
+// Source of truth: design §"Data Models → Deal Room and participants".
+// Acceptance criteria: R2.6, R2.8, R3.4, R3.5, R5.6, R6.1, R7.1, R7.2.
+//
+// Notes:
+//   • `DealRoom.public_id` is the URL slug shared in `https://bothsafe.app/d/{publicId}`
+//     (AGENTS.md → "URL Format"). UNIQUE so the slug never collides; the slug
+//     itself is generated by the Deal service (cuid v2 or short Crockford
+//     base32) — the schema only enforces uniqueness.
+//   • `creator_role` records who created the deal so the join flow can assign
+//     the opposite role to the counterparty (R2.6, R3.4).
+//   • Product / participant fields are nullable because the buyer-flow allows
+//     filling them out incrementally, and `computeMissingFields` (task 5.4)
+//     reads these columns to determine `missing_fields` (R6.1, R6.2).
+//   • `condition` is plain TEXT (not an enum) — only two values exist today
+//     (`'new'`, `'used'`) and a TEXT column avoids a future Postgres enum
+//     migration if we add `'refurbished'` etc. later.
+//   • `deal_amount` uses `Decimal @db.Decimal(18, 2)` so monetary math stays
+//     exact at two decimals (R2.1, R7.1, R14.1). Never `Float`.
+//   • `reference_note` is the 16-char Crockford base32 token allocated when
+//     the buyer asks for a KHQR (R10.1, task 7.2). UNIQUE so the KHQR
+//     verifier can match by `reference_note + amount + currency` without
+//     ambiguity (R11.1).
+//   • `khqr_payload_meta` caches the raw generator output (TLV string,
+//     amount, currency, account id, generated_at) so the same KHQR can be
+//     re-served without re-calling Bakong (R10.2, R10.8).
+//   • `terms_hash` is the SHA-256 of canonical product+participant fields
+//     (R8.1). It is recomputed on every section patch and snapshotted onto
+//     each `Approval` row so we can detect material edits (task 5.3, R8.4).
+//   • `expires_at` is the invite clock for `AWAITING_COUNTERPARTY → EXPIRED`
+//     (R2.6, R2.8). Null until the counterparty link is issued.
+//   • `DealParticipant` is the canonical buyer/seller assignment. The two
+//     UNIQUE constraints together guarantee:
+//       – `(deal_id, role)`    → at most one buyer and one seller per deal,
+//       – `(deal_id, user_id)` → the same user can't hold both roles (R5.6).
+//   • Per-side messaging hints (`telegram_chat_id`, `wechat_id`,
+//     `messenger_name`) live here rather than on `User` because they're
+//     deal-scoped contact preferences, not the user's permanent identity.
+// -----------------------------------------------------------------------------
+
+/// A single escrow conversation between a buyer and a seller. The Deal Room
+/// is the unit of state in BothSafe — every status transition, ledger entry,
+/// and notification anchors back to a `DealRoom.id`.
+model DealRoom {
+  id              String          @id @default(cuid(2))
+  /// URL slug exposed at `/d/{public_id}`. UNIQUE so links are unambiguous.
+  public_id       String          @unique
+  creator_user_id String
+  /// Role the creator plays. The counterparty assumes the opposite role on
+  /// join (R2.6, R3.4).
+  creator_role    ParticipantRole
+  creator_source  CreatorSource   @default(web)
+  status          DealStatus      @default(DRAFT)
+
+  // --- Product section (R7.1) -----------------------------------------------
+  product_title       String?
+  product_type        String?
+  product_description String?
+  quantity            Int?
+  /// `'new'` or `'used'`. Stored as TEXT (not an enum) so additional values
+  /// can be introduced without a Postgres enum migration.
+  condition           String?
+  /// Two-decimal fixed-point monetary value (R2.1, R7.1).
+  deal_amount         Decimal?  @db.Decimal(18, 2)
+  currency            Currency?
+
+  // --- Participant denormalisation (R8.1, terms-hash input) -----------------
+  buyer_name  String?
+  seller_name String?
+
+  // --- Delivery section (R7.1, task 5.6) ------------------------------------
+  delivery_method  String?
+  delivery_address String?
+  delivery_note    String?
+
+  // --- Payout section — seller-only (R7.1, R7.6, task 5.6) ------------------
+  /// Seller KHQR string or identifier used to receive payout (R2.5).
+  payout_khqr           String?
+  payout_bank_name      String?
+  payout_account_name   String?
+  payout_account_number String?
+
+  // --- Payment ---------------------------------------------------------------
+  /// 16-char Crockford base32 token bound to this deal's KHQR (R10.1).
+  /// UNIQUE so `(reference_note, amount, currency)` matching is unambiguous.
+  reference_note    String? @unique
+  /// Cached KHQR generator output (TLV string, amount, account id, etc.).
+  khqr_payload_meta Json?   @db.JsonB
+
+  /// SHA-256 of canonical product+participant fields (R8.1). Recomputed on
+  /// every section patch; snapshotted onto each `Approval` row.
+  terms_hash String?
+
+  // --- Lifecycle -------------------------------------------------------------
+  created_at DateTime  @default(now()) @db.Timestamptz
+  updated_at DateTime  @updatedAt @db.Timestamptz
+  /// Invite clock for `AWAITING_COUNTERPARTY → EXPIRED` (R2.6, R2.8).
+  expires_at DateTime? @db.Timestamptz
+
+  creator                   User                     @relation("DealRoomCreator", fields: [creator_user_id], references: [id])
+  participants              DealParticipant[]
+  invite_tokens             InviteToken[]
+  creator_access_token      CreatorAccessToken?
+  participant_access_tokens ParticipantAccessToken[]
+  approvals                 Approval[]
+  payment_proofs            PaymentProof[]
+  shipping_proofs           ShippingProof[]
+  confirmation              Confirmation?
+  disputes                  Dispute[]
+  ledger_entries            WalletLedgerEntry[]
+  audit_log_entries         AuditLogEntry[]
+
+  @@index([status])
+  @@index([creator_user_id, created_at(sort: Desc)])
+  @@map("deal_room")
+}
+
+/// Membership row binding a `User` to a `DealRoom` in a specific role.
+/// Exactly one buyer and one seller exist per deal (enforced by the
+/// `(deal_id, role)` UNIQUE); a single user can never hold both sides
+/// (enforced by the `(deal_id, user_id)` UNIQUE — R5.6).
+model DealParticipant {
+  id        String          @id @default(cuid(2))
+  deal_id   String
+  user_id   String
+  role      ParticipantRole
+  joined_at DateTime        @default(now()) @db.Timestamptz
+
+  /// Per-deal contact / messaging hints. These are deal-scoped because the
+  /// same user may prefer different channels per counterparty.
+  phone            String?
+  preferred_lang   PreferredLang?
+  telegram_chat_id String?
+  wechat_id        String?
+  messenger_name   String?
+
+  deal DealRoom @relation(fields: [deal_id], references: [id], onDelete: Cascade)
+  user User     @relation(fields: [user_id], references: [id])
+
+  @@unique([deal_id, role])
+  @@unique([deal_id, user_id])
+  @@map("deal_participant")
+}
+
+// -----------------------------------------------------------------------------
+// Tokens — task 2.5
+//
+// Source of truth: design §"Data Models → Tokens".
+// Acceptance criteria: R2.9, R3.6, R4.3, R5.6, R5.8, R5.10.
+//
+// Strategy:
+//   • All three tables persist only the SHA-256 (`token_hash`) of the raw
+//     cuid v2 token. Raw values are returned exactly once — at creation or
+//     join — and never re-emitted (R2.9, R5.8; design §"Token strategy").
+//     There is no `token` / `token_raw` column anywhere.
+//   • UNIQUE on every `token_hash` so a stolen-then-rotated token can never
+//     accidentally collide with another row, and so lookup by hash returns
+//     at most one record.
+//   • All token rows are meaningless without their owning deal; the deal FK
+//     therefore uses `onDelete: Cascade`. Hard-deleting a `DealRoom` (rare,
+//     mostly admin/test cleanup) automatically purges its tokens.
+//
+// Per-model notes:
+//   • `InviteToken` — invitee link (`?invite=…`). `expires_at` enforces the
+//     `INVITE_TOKEN_TTL_HOURS` clock (default 7 d, R4.3); `invalidated_at`
+//     is set the moment the counterparty consumes the link in
+//     `POST /v1/deals/:publicId/join` (R5.6, R5.10). Both columns are
+//     checked on every read so an expired-or-already-used token is rejected
+//     before the join transaction starts. The `(deal_id)` index supports
+//     "active invite for this deal?" lookups during creator-side rotation.
+//   • `CreatorAccessToken` — creator's private link (`?access=…`). Exactly
+//     one per deal (UNIQUE on `deal_id`), bound to the creating `User`
+//     (R3.6). It does not expire on its own; revocation happens at the
+//     deal lifecycle level (R3.6 — never sent to the counterparty).
+//   • `ParticipantAccessToken` — issued to the counterparty after a
+//     successful join (R5.6, R5.8). UNIQUE `(deal_id, user_id)` so a single
+//     user holds at most one token per deal, even across re-joins.
+// -----------------------------------------------------------------------------
+
+/// Single-use invite token bound to a deal. Embedded in the invite link
+/// `https://bothsafe.app/d/{publicId}?invite={inviteToken}` and consumed by
+/// the counterparty's `POST /v1/deals/:publicId/join` call.
+model InviteToken {
+  id             String    @id @default(cuid(2))
+  deal_id        String
+  /// SHA-256 (hex) of the raw cuid v2 token. UNIQUE so a hash lookup
+  /// returns at most one row and rotated tokens cannot collide.
+  token_hash     String    @unique
+  /// Hard expiry clock (default `created_at + INVITE_TOKEN_TTL_HOURS`,
+  /// R4.3). Tokens past this instant are rejected before any DB write.
+  expires_at     DateTime  @db.Timestamptz
+  /// Set the moment the token is consumed (R5.6) so a single invite link
+  /// can never be redeemed twice. NULL for active tokens.
+  invalidated_at DateTime? @db.Timestamptz
+  created_at     DateTime  @default(now()) @db.Timestamptz
+
+  deal DealRoom @relation(fields: [deal_id], references: [id], onDelete: Cascade)
+
+  @@index([deal_id])
+  @@map("invite_token")
+}
+
+/// Long-lived access token retained by the deal creator. Embedded in the
+/// creator link `https://bothsafe.app/d/{publicId}?access={creatorAccessToken}`.
+/// Exactly one row per deal (R3.6) and never sent to the counterparty.
+model CreatorAccessToken {
+  id         String   @id @default(cuid(2))
+  /// UNIQUE — at most one creator token per deal (R3.6).
+  deal_id    String   @unique
+  user_id    String
+  /// SHA-256 (hex) of the raw cuid v2 token; UNIQUE for the same reasons
+  /// as `InviteToken.token_hash`.
+  token_hash String   @unique
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  deal DealRoom @relation(fields: [deal_id], references: [id], onDelete: Cascade)
+  user User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@map("creator_access_token")
+}
+
+/// Long-lived access token issued to the counterparty after a successful
+/// join (R5.6, R5.8). UNIQUE `(deal_id, user_id)` so a single user holds at
+/// most one participant token per deal, even across rejoin attempts.
+model ParticipantAccessToken {
+  id         String   @id @default(cuid(2))
+  deal_id    String
+  user_id    String
+  /// SHA-256 (hex) of the raw cuid v2 token. UNIQUE across the table.
+  token_hash String   @unique
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  deal DealRoom @relation(fields: [deal_id], references: [id], onDelete: Cascade)
+  user User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([deal_id, user_id])
+  @@index([user_id])
+  @@map("participant_access_token")
+}
+
+// -----------------------------------------------------------------------------
+// Approvals, proofs, dispute — task 2.6
+//
+// Source of truth: design §"Data Models → Approvals, proofs, dispute".
+// Acceptance criteria: R8.1, R8.4, R10.4, R10.5, R12.2, R13.2, R17.5, R17.6.
+//
+// Notes:
+//   • `Approval.terms_hash` is a snapshot of `DealRoom.terms_hash` at the
+//     moment the participant approved (R8.1). When a section patch alters
+//     any canonical field, `DealService` recomputes the deal's hash and
+//     sets `invalidated_at = now()` on every approval row whose
+//     `terms_hash` no longer matches (R7.3, R8.4). "Active approvals" are
+//     therefore the latest non-invalidated rows whose hash equals the
+//     current `DealRoom.terms_hash`.
+//   • `Confirmation` enforces "one buyer-confirm per deal" via the
+//     `deal_id` UNIQUE (R13.2). The composite UNIQUE
+//     `(deal_id, idempotency_key)` makes `POST /v1/deals/.../confirm-received`
+//     idempotent across retries — a duplicate `Idempotency-Key` returns the
+//     stored result instead of re-running the transition.
+//   • `Dispute.status` is plain TEXT (`'open'` | `'resolved'`) rather than
+//     an enum because the value space is tiny and stable, and TEXT plays
+//     better with the partial unique index documented below.
+//
+//     ⚠ Partial UNIQUE index (R17.6) — Prisma does NOT support partial
+//     unique indexes natively (`@@unique` always emits a full UNIQUE).
+//     The constraint
+//
+//         CREATE UNIQUE INDEX dispute_open_per_deal_unique
+//             ON dispute (deal_id) WHERE status = 'open';
+//
+//     is therefore created via a raw-SQL migration in task 2.10 / 2.11
+//     (post-migration SQL). The plain `@@index([deal_id, status])` below
+//     covers the lookup path until that migration runs; do not rely on
+//     this `@@index` to enforce uniqueness.
+//   • `Dispute.resolved_by` and `Dispute.opener_user_id` both target
+//     `User`, so the back-relations are disambiguated with named relations
+//     (`@relation("DisputeOpener")`, `@relation("DisputeResolver")`).
+//   • `Dispute → DisputeEvidence` uses `onDelete: Cascade`: evidence rows
+//     are meaningless without their parent dispute and should be purged on
+//     hard delete (rare, mostly admin/test cleanup).
+//   • Deal-scoped child tables (`Approval`, `PaymentProof`, `ShippingProof`,
+//     `Confirmation`, `Dispute`) use `onDelete: Cascade` on `deal_id` to
+//     match the convention established by `DealParticipant`, `InviteToken`,
+//     and the access-token tables.
+//   • These tables are not append-only at the DB-role level (only
+//     `wallet_ledger_entry` and `audit_log_entry` get the trigger-based
+//     enforcement in task 2.10), so plain `@db.Timestamptz` (microsecond
+//     precision) is sufficient — no ms precision required.
+// -----------------------------------------------------------------------------
+
+/// Snapshot of a participant's approval of a deal's current terms. Captures
+/// `DealRoom.terms_hash` at approval time so subsequent material edits
+/// (R7.3, R8.4) can invalidate the row by setting `invalidated_at` instead
+/// of deleting it.
+model Approval {
+  id             String          @id @default(cuid(2))
+  deal_id        String
+  user_id        String
+  role           ParticipantRole
+  /// Snapshot of `DealRoom.terms_hash` at the instant this row was inserted
+  /// (R8.1). Compared against the deal's current hash to determine whether
+  /// the approval is still "active".
+  terms_hash     String
+  /// Set by `DealService` when a material edit changes the deal's terms
+  /// (R7.3, R8.4). NULL while the approval is still considered active.
+  invalidated_at DateTime?       @db.Timestamptz
+  created_at     DateTime        @default(now()) @db.Timestamptz
+
+  deal DealRoom @relation(fields: [deal_id], references: [id], onDelete: Cascade)
+  user User     @relation(fields: [user_id], references: [id])
+
+  @@index([deal_id])
+  @@map("approval")
+}
+
+/// Buyer-side proof that they paid via KHQR. Created by
+/// `POST /v1/deals/.../payment/khqr/receipt` (R10.4) and reviewed by an
+/// admin via `POST /v1/admin/payment-proofs/:id/{verify,reject}` (R11.4–R11.7).
+/// At least one of `paid_amount` or `attachment_key` is required at the
+/// service layer (R10.5); the schema does not enforce that here because
+/// nullability of both columns is intentional (the buyer may submit either
+/// a typed amount alone or just a receipt image).
+model PaymentProof {
+  id              String   @id @default(cuid(2))
+  deal_id         String
+  buyer_user_id   String
+  /// Two-decimal fixed-point amount the buyer claims they paid (R10.4).
+  paid_amount     Decimal? @db.Decimal(18, 2)
+  buyer_note      String?
+  /// MinIO object key under the `payment-proofs/` prefix.
+  attachment_key  String?
+  attachment_mime String?
+  /// Origin of the proof. Defaults to `'khqr_receipt'`; reserved for future
+  /// proof sources (e.g., admin-recorded bank transfer).
+  source          String   @default("khqr_receipt")
+  created_at      DateTime @default(now()) @db.Timestamptz
+
+  deal  DealRoom @relation(fields: [deal_id], references: [id], onDelete: Cascade)
+  buyer User     @relation(fields: [buyer_user_id], references: [id])
+
+  @@index([deal_id])
+  @@map("payment_proof")
+}
+
+/// Seller-side proof of shipment. Created by
+/// `POST /v1/deals/.../shipping-proofs` (R12.2). At least one of
+/// `delivery_company`, `tracking_number`, `package_photo_key`, or
+/// `delivery_receipt_key` must be present (validated at the service
+/// layer, R12.1). Object keys reference MinIO under the `shipping-proofs/`
+/// prefix.
+model ShippingProof {
+  id                   String   @id @default(cuid(2))
+  deal_id              String
+  seller_user_id       String
+  delivery_company     String?
+  tracking_number      String?
+  /// MinIO object key for the package photo (`shipping-proofs/`).
+  package_photo_key    String?
+  /// MinIO object key for the courier delivery receipt.
+  delivery_receipt_key String?
+  seller_note          String?
+  created_at           DateTime @default(now()) @db.Timestamptz
+
+  deal   DealRoom @relation(fields: [deal_id], references: [id], onDelete: Cascade)
+  seller User     @relation(fields: [seller_user_id], references: [id])
+
+  @@index([deal_id])
+  @@map("shipping_proof")
+}
+
+/// Buyer's "I received the item" confirmation. UNIQUE on `deal_id` enforces
+/// at most one confirmation per deal (R13.2). The composite UNIQUE
+/// `(deal_id, idempotency_key)` makes the endpoint idempotent across
+/// retries — a duplicate `Idempotency-Key` returns the stored result rather
+/// than transitioning the deal again.
+model Confirmation {
+  id              String   @id @default(cuid(2))
+  /// UNIQUE — one buyer confirmation per deal (R13.2).
+  deal_id         String   @unique
+  buyer_user_id   String
+  /// Caller-supplied `Idempotency-Key`. Persisted so retries with the same
+  /// key short-circuit to the previously-stored result.
+  idempotency_key String
+  created_at      DateTime @default(now()) @db.Timestamptz
+
+  deal  DealRoom @relation(fields: [deal_id], references: [id], onDelete: Cascade)
+  buyer User     @relation(fields: [buyer_user_id], references: [id])
+
+  @@unique([deal_id, idempotency_key])
+  @@map("confirmation")
+}
+
+/// Buyer- or seller-opened dispute over a deal. At most one open dispute
+/// per deal at any time — enforced by a partial UNIQUE index on
+/// `(deal_id) WHERE status = 'open'` that is created via raw SQL in
+/// task 2.10 (Prisma does not support partial unique indexes natively).
+/// The non-partial `@@index([deal_id, status])` below covers the lookup
+/// path until that migration runs; it is NOT a uniqueness guarantee.
+model Dispute {
+  id               String        @id @default(cuid(2))
+  deal_id          String
+  opener_user_id   String
+  reason           DisputeReason
+  message          String
+  /// `'open'` while the dispute is being adjudicated; `'resolved'` once an
+  /// admin has chosen a resolution (R17.5, R17.6).
+  status           String        @default("open")
+  /// `'release'` (funds → seller) or `'refund'` (funds → buyer) once
+  /// resolved. NULL while `status = 'open'`.
+  resolution       String?
+  resolved_by      String?
+  resolution_note  String?
+  /// External reference recorded when the resolution paid the seller.
+  payout_reference String?
+  /// External reference recorded when the resolution refunded the buyer.
+  refund_reference String?
+  created_at       DateTime      @default(now()) @db.Timestamptz
+  resolved_at      DateTime?     @db.Timestamptz
+
+  deal     DealRoom          @relation(fields: [deal_id], references: [id], onDelete: Cascade)
+  opener   User              @relation("DisputeOpener", fields: [opener_user_id], references: [id])
+  resolver User?             @relation("DisputeResolver", fields: [resolved_by], references: [id])
+  evidence DisputeEvidence[]
+
+  // Plain index on (deal_id, status) — the actual partial UNIQUE
+  // (`UNIQUE ON dispute (deal_id) WHERE status = 'open'`) is created via
+  // raw SQL in task 2.10 because Prisma cannot express partial uniques.
+  @@index([deal_id, status])
+  @@map("dispute")
+}
+
+/// Evidence (image or PDF) attached to a `Dispute`. Cascades on dispute
+/// delete because evidence is meaningless without its parent dispute.
+/// Object keys reference MinIO under the `disputes/` prefix.
+model DisputeEvidence {
+  id               String   @id @default(cuid(2))
+  dispute_id       String
+  uploader_user_id String
+  /// MinIO object key (`disputes/...`).
+  attachment_key   String
+  attachment_mime  String
+  created_at       DateTime @default(now()) @db.Timestamptz
+
+  dispute  Dispute @relation(fields: [dispute_id], references: [id], onDelete: Cascade)
+  uploader User    @relation(fields: [uploader_user_id], references: [id])
+
+  @@index([dispute_id])
+  @@map("dispute_evidence")
+}
+
+// -----------------------------------------------------------------------------
+// Wallet and ledger — task 2.7
+//
+// Source of truth: design §"Data Models → Wallet and ledger".
+// Acceptance criteria: R14.1, R14.6.
+//
+// Notes:
+//   • `Wallet` is the per-user, per-currency balance container. The composite
+//     UNIQUE `(user_id, currency)` enforces "at most one wallet per
+//     (user, currency)" (R14.6). Balance is never stored — it is derived as
+//     a signed sum over `WalletLedgerEntry` rows (see `WalletService`,
+//     task 6.1).
+//   • `WalletRole` is a one-to-one annotation on `Wallet` (`wallet_id` is
+//     both PK and FK). It marks the canonical platform-owned escrow and
+//     platform-fee wallets versus regular user wallets. Stored as TEXT
+//     (`'user' | 'escrow' | 'platform_fee'`) rather than an enum so future
+//     roles can be added without a Postgres enum migration.
+//   • `WalletLedgerEntry` is append-only at the DB-role level — task 2.10
+//     REVOKEs `UPDATE, DELETE, TRUNCATE` from the `app` role and installs
+//     `BEFORE UPDATE OR DELETE OR TRUNCATE` triggers calling
+//     `reject_mutation()`. Prisma cannot express either, so the schema
+//     here only declares the shape; the enforcement migration is run as
+//     the `migrator` role in task 2.10.
+//   • `id` is `BigInt @default(autoincrement())` → Postgres `BIGSERIAL`,
+//     matching the design DDL. The remaining PKs in the schema are
+//     cuid v2 strings; the ledger uses a monotonic 64-bit integer so
+//     append-only ordering is stable and cheap.
+//   • `amount Decimal @db.Decimal(18, 2)` is unsigned at the value level.
+//     The sign of a movement is encoded by `direction` (`credit | debit`),
+//     so a balance is `Σ(credit.amount) − Σ(debit.amount)` (R14.3).
+//     The `CHECK (amount > 0)` constraint from the design DDL cannot be
+//     expressed in Prisma — it is enforced via the raw-SQL migration in
+//     task 2.10 alongside the append-only triggers.
+//   • `created_at` uses `@db.Timestamptz(3)` (millisecond precision per
+//     R14.1) instead of the default microsecond `@db.Timestamptz` because
+//     the ledger is replayed and serialised externally in ms-precision
+//     formats; ms precision is also used on `audit_log_entry`.
+//   • `related_withdrawal_id` is now an FK to `WithdrawalRequest` (added in
+//     task 2.8). The relation block lives on `WalletLedgerEntry`; the
+//     reverse `ledger_entries` relation lives on `WithdrawalRequest`.
+//     The `@@index([related_withdrawal_id])` below covers cursor lookups
+//     by withdrawal id.
+//   • Indexes follow the design exactly:
+//       – `(wallet_id, created_at DESC)` — hot path for paginated ledger
+//         listings (R14.3, task 6.6).
+//       – `(related_deal_id)` — locate ledger rows for a deal.
+//       – `(related_withdrawal_id)` — locate ledger rows for a withdrawal.
+// -----------------------------------------------------------------------------
+
+/// Per-user, per-currency balance container. Balance is derived as a signed
+/// sum over `WalletLedgerEntry` rows (R14.3) and is never stored. UNIQUE
+/// `(user_id, currency)` guarantees at most one wallet per
+/// (user, currency) (R14.6).
+model Wallet {
+  id         String   @id @default(cuid(2))
+  user_id    String
+  currency   Currency
+  created_at DateTime @default(now()) @db.Timestamptz
+
+  user           User                @relation(fields: [user_id], references: [id])
+  role           WalletRole?
+  ledger_entries WalletLedgerEntry[]
+  withdrawals    WithdrawalRequest[]
+
+  @@unique([user_id, currency])
+  @@index([user_id])
+  @@map("wallet")
+}
+
+/// One-to-one annotation on `Wallet` marking it as a regular user wallet,
+/// the platform-owned escrow wallet, or the platform fee wallet. `wallet_id`
+/// is both the PK and the FK so each wallet has at most one role.
+/// Values: `'user' | 'escrow' | 'platform_fee'` (TEXT, not an enum, so
+/// new roles can be added without a Postgres enum migration).
+model WalletRole {
+  wallet_id String @id
+  role      String
+
+  wallet Wallet @relation(fields: [wallet_id], references: [id], onDelete: Cascade)
+
+  @@map("wallet_role")
+}
+
+/// Append-only financial movement on a `Wallet`. The amount is unsigned
+/// (`amount > 0` enforced via raw SQL in task 2.10); the sign of the
+/// movement is encoded by `direction`. Balance derivation:
+/// `Σ(credit.amount) − Σ(debit.amount)` (R14.3).
+///
+/// Append-only enforcement: task 2.10 REVOKEs `UPDATE, DELETE, TRUNCATE`
+/// from the `app` role and installs `BEFORE UPDATE OR DELETE OR TRUNCATE`
+/// triggers that call `reject_mutation()`. Neither can be expressed in
+/// Prisma — only `INSERT` and `SELECT` are reachable from the app role at
+/// runtime.
+model WalletLedgerEntry {
+  // BIGSERIAL PK per design DDL — monotonic 64-bit append order, distinct
+  // from the cuid v2 PKs used elsewhere.
+  id         BigInt          @id @default(autoincrement())
+  wallet_id  String
+  /// Two-decimal fixed-point amount, unsigned (R14.1). The matching
+  /// `CHECK (amount > 0)` constraint is added via raw SQL in task 2.10
+  /// (along with the append-only triggers); Prisma cannot express it.
+  amount     Decimal         @db.Decimal(18, 2)
+  currency   Currency
+  direction  LedgerDirection
+  entry_type LedgerEntryType
+
+  related_deal_id       String?
+  /// FK to `WithdrawalRequest` (added in task 2.8). NULL on ledger rows
+  /// not tied to a withdrawal (e.g., `ESCROW_RECEIVED`,
+  /// `SELLER_PAYOUT_*` written by auto-release). Hold/payout/rejection
+  /// rows for a withdrawal point at the same `WithdrawalRequest` row via
+  /// this column.
+  related_withdrawal_id String?
+  /// Bakong transaction id, payout reference, etc.
+  external_ref          String?
+  /// Millisecond precision per R14.1.
+  created_at            DateTime @default(now()) @db.Timestamptz(3)
+
+  wallet             Wallet             @relation(fields: [wallet_id], references: [id])
+  related_deal       DealRoom?          @relation(fields: [related_deal_id], references: [id])
+  related_withdrawal WithdrawalRequest? @relation(fields: [related_withdrawal_id], references: [id])
+
+  @@index([wallet_id, created_at(sort: Desc)])
+  @@index([related_deal_id])
+  @@index([related_withdrawal_id])
+  @@map("wallet_ledger_entry")
+}
+
+// -----------------------------------------------------------------------------
+// Withdrawal — task 2.8
+//
+// Source of truth: design §"Data Models → Withdrawal".
+// Acceptance criteria: R15.1–R15.5, R15.8, R16.1.
+//
+// Notes:
+//   • Sellers create a `WithdrawalRequest` to move funds out of their wallet
+//     to either a personal KHQR or a bank account (R15.3, R15.4). The
+//     request enters `pending_admin_review` and is reviewed by an admin who
+//     either marks it `paid` (writes a `SELLER_PAYOUT_SENT` ledger entry,
+//     R16.2) or `rejected` (writes a compensating `ADJUSTMENT` credit,
+//     R16.3) — see design §"Withdrawal request lifecycle".
+//   • The Binance-Pay destination (`destination_type='binance'`,
+//     `binance_pay_id?`, `binance_email?`) is intentionally NOT modelled
+//     here. Task 17.1 introduces it together with the Binance-Pay payout
+//     pipeline. The `WithdrawalDestination` enum likewise omits `binance`
+//     until then. The post-migration `CHECK` constraint added in task 2.10
+//     therefore covers only the `khqr` and `bank` branches; task 17.1
+//     drops and re-creates that CHECK to add the `binance` branch.
+//   • `amount` is a two-decimal fixed-point unsigned value (R14.1, R15.1).
+//     Range/positivity is validated at the service layer (R15.1: amount > 0
+//     and ≤ available balance) and reinforced by the application's wallet
+//     service. There is no `CHECK (amount > 0)` here because the design
+//     places that constraint on `wallet_ledger_entry.amount` (added via
+//     raw SQL in task 2.10) — the withdrawal row's amount is mirrored by
+//     the corresponding `SELLER_PAYOUT_PENDING` ledger row at create time.
+//   • Branched destination columns: `khqr_string` / `khqr_image_key` for
+//     `destination_type='khqr'` (R15.3); `bank_name` /
+//     `bank_account_name` / `bank_account_number` for
+//     `destination_type='bank'` (R15.4). The "exactly one branch is
+//     populated" invariant is the
+//
+//         CHECK (
+//           (destination_type = 'khqr' AND
+//              (khqr_string IS NOT NULL OR khqr_image_key IS NOT NULL)) OR
+//           (destination_type = 'bank' AND
+//              bank_name IS NOT NULL AND
+//              bank_account_name IS NOT NULL AND
+//              bank_account_number IS NOT NULL)
+//         )
+//
+//     constraint defined in design §"Data Models → Withdrawal". Prisma
+//     cannot express CHECK constraints, so it is created via raw SQL in
+//     task 2.10 (post-migration SQL). Until that migration runs, the
+//     branching invariant is enforced at the service layer only.
+//   • Two FKs to `User`:
+//       – `seller_user_id` — the wallet owner. Named relation
+//         `WithdrawalSeller` so it is disambiguated from `reviewed_by`.
+//       – `reviewed_by`    — the admin who acted on the request. Named
+//         relation `WithdrawalReviewer`. Nullable while the row is still
+//         `pending_admin_review` (R16.4).
+//   • Reverse relation `ledger_entries WalletLedgerEntry[]` lets the
+//     wallet service walk hold/payout/rejection rows for a withdrawal.
+//   • Indexes follow the design exactly:
+//       – `(seller_user_id, created_at DESC)` — seller-side listing
+//         (`GET /v1/withdrawals/me`, R15.1).
+//       – `(status, created_at DESC)`         — admin queue listing
+//         (`GET /v1/admin/withdrawals?status=...`, R16.1).
+//   • Plain `@db.Timestamptz` (microsecond precision) is sufficient — only
+//     `wallet_ledger_entry` and `audit_log_entry` use ms precision per
+//     R14.1.
+// -----------------------------------------------------------------------------
+
+/// Seller-initiated request to move funds out of a `Wallet` to a KHQR or
+/// bank destination, subject to admin review (R15.1–R15.5, R16.1).
+model WithdrawalRequest {
+  id               String                @id @default(cuid(2))
+  seller_user_id   String
+  wallet_id        String
+  /// Two-decimal fixed-point amount the seller wants to withdraw (R15.1).
+  amount           Decimal               @db.Decimal(18, 2)
+  currency         Currency
+  destination_type WithdrawalDestination
+
+  // --- KHQR branch (destination_type = 'khqr', R15.3) -----------------------
+  /// Raw KHQR TLV string the seller pasted. At least one of
+  /// `khqr_string` / `khqr_image_key` must be present when
+  /// `destination_type = 'khqr'` (enforced by the post-migration CHECK).
+  khqr_string    String?
+  /// MinIO object key under the `withdrawal-khqr/` prefix.
+  khqr_image_key String?
+
+  // --- Bank branch (destination_type = 'bank', R15.4) -----------------------
+  /// All three bank fields must be present when
+  /// `destination_type = 'bank'` (enforced by the post-migration CHECK).
+  bank_name           String?
+  bank_account_name   String?
+  bank_account_number String?
+
+  // --- Lifecycle ------------------------------------------------------------
+  status           WithdrawalStatus @default(pending_admin_review)
+  /// External payout reference the admin records on approval (R16.2).
+  payout_reference String?
+  /// Free-text reason the admin recorded on rejection (R16.3).
+  rejection_reason String?
+  /// Free-text admin note attached at review time (R16.5).
+  admin_note       String?
+  /// FK to the admin `User` who reviewed this request (R16.4). NULL while
+  /// the request is still `pending_admin_review`.
+  reviewed_by      String?
+  reviewed_at      DateTime?        @db.Timestamptz
+  created_at       DateTime         @default(now()) @db.Timestamptz
+
+  seller            User                @relation("WithdrawalSeller", fields: [seller_user_id], references: [id])
+  wallet            Wallet              @relation(fields: [wallet_id], references: [id])
+  reviewer          User?               @relation("WithdrawalReviewer", fields: [reviewed_by], references: [id])
+  ledger_entries    WalletLedgerEntry[]
+  audit_log_entries AuditLogEntry[]
+
+  // Branching CHECK constraint (`destination_type` ↔ branch fields) cannot
+  // be expressed in Prisma; it is created via raw SQL in task 2.10 (see
+  // design §"Data Models → Withdrawal").
+  @@index([seller_user_id, created_at(sort: Desc)])
+  @@index([status, created_at(sort: Desc)])
+  @@map("withdrawal_request")
+}
+
+// -----------------------------------------------------------------------------
+// Audit log, notification outbox, idempotency, bot conversation — task 2.9
+//
+// Source of truth: design §"Audit log and notifications", §"Idempotency key
+// dedup", §"Telegram bot design → BotConversation".
+// Acceptance criteria: R18.11, R19.10, R20.1–R20.3.
+//
+// Notes:
+//   • `AuditLogEntry` is append-only at the DB-role level — task 2.10
+//     REVOKEs `UPDATE, DELETE, TRUNCATE` from the `app` role and installs
+//     `BEFORE UPDATE OR DELETE OR TRUNCATE` triggers calling
+//     `reject_mutation()`. Prisma cannot express either, so the schema
+//     here only declares the shape; the enforcement migration is run as
+//     the `migrator` role in task 2.10. Only `INSERT` and `SELECT` are
+//     reachable from the app role at runtime (R20.5).
+//   • `AuditLogEntry.id` is `BigInt @default(autoincrement())` →
+//     Postgres `BIGSERIAL`, matching design DDL and the
+//     `WalletLedgerEntry` convention. Most other PKs in the schema are
+//     cuid v2 strings; the audit log uses a monotonic 64-bit integer so
+//     append-only ordering is stable and cheap.
+//   • `AuditLogEntry.action_type` is plain TEXT (not an enum) so new
+//     action types can be added without a Postgres enum migration —
+//     examples: `'DEAL_STATUS_TRANSITION'`, `'WALLET_PAYMENT'`,
+//     `'WITHDRAWAL_HOLD'`, `'WITHDRAWAL_PAYOUT'`,
+//     `'ADMIN_PAYMENT_VERIFY'`, etc.
+//   • `created_at` uses `@db.Timestamptz(3)` (millisecond precision per
+//     R20.1–R20.3) instead of the default microsecond `@db.Timestamptz`.
+//     Matches `wallet_ledger_entry.created_at`.
+//   • Indexes follow the design exactly:
+//       – `(deal_id, created_at DESC)`        — per-deal audit timeline.
+//       – `(actor_user_id, created_at DESC)`  — per-actor audit listing.
+//       – `(action_type, created_at DESC)`    — admin filter by action.
+//
+//   • `NotificationOutboxEntry` is the substrate for the outbox-pattern
+//     dispatcher (R19.10, R19.11). The drainer scans for
+//     `status='pending'` ordered by `created_at`, hence the
+//     `(status, created_at)` index — hot path for the 1-second
+//     `NotificationDispatcher` cron in task 10.2.
+//   • `recipient_kind` is plain TEXT (`'user' | 'admin_queue' |
+//     'telegram_chat'`) so future recipient kinds can be added without an
+//     enum migration. `recipient_id` is nullable because the
+//     `'admin_queue'` kind has no specific recipient id.
+//   • `BIGSERIAL` PK matches the design DDL — outbox rows are written
+//     in the same transaction as the originating action and ordered by
+//     monotonic insertion time.
+//   • Plain `@db.Timestamptz` (microsecond precision) is sufficient — only
+//     `wallet_ledger_entry` and `audit_log_entry` use ms precision.
+//
+//   • `IdempotencyKey` deduplicates retried requests on sensitive POST
+//     endpoints (R13.2 confirm-received, R16.2 admin approve, R16.3
+//     admin reject, R10.4 KHQR receipt, R18.11 Telegram retries). The
+//     middleware looks up `(scope, key, user_id)` and either short-
+//     circuits to the cached `result_ref` (cache hit) or inserts the
+//     row inside the originating transaction (cache miss).
+//   • Design DDL uses `key TEXT PK` plus a UNIQUE on
+//     `(scope, key, user_id)`. We collapse those into a single
+//     composite primary key `@@id([scope, key, user_id])` per the
+//     task spec — functionally equivalent (composite PK gives the
+//     UNIQUE for free) and avoids a redundant secondary index.
+//   • `(user_id, created_at)` index supports background cleanup jobs
+//     ("delete idempotency keys older than N days for this user").
+//
+//   • `BotConversation` persists Telegram bot FSM state across container
+//     restarts (design §"Telegram bot design"). PK is the
+//     `telegram_chat_id` itself so lookups are O(1) and there is at most
+//     one conversation row per chat. `partial_payload` accumulates
+//     fields collected during `/newdeal` (`Product_Title`, role, amount,
+//     ...). `retries` tracks per-step failures for the bot's own
+//     retry budget (distinct from idempotency-key retries). `/cancel`
+//     deletes the row (R18.13).
+// -----------------------------------------------------------------------------
+
+/// Append-only record of every state-changing action in the system.
+/// Written inside the same `$transaction` as the originating action
+/// (R20.1–R20.3) via `AuditService.record(entry, tx)` (task 3.9).
+///
+/// Append-only enforcement: task 2.10 REVOKEs `UPDATE, DELETE, TRUNCATE`
+/// from the `app` role and installs `BEFORE UPDATE OR DELETE OR TRUNCATE`
+/// triggers calling `reject_mutation()`. Neither can be expressed in
+/// Prisma — only `INSERT` and `SELECT` are reachable from the app role.
+model AuditLogEntry {
+  // BIGSERIAL PK per design DDL — monotonic 64-bit append order, distinct
+  // from the cuid v2 PKs used elsewhere. Matches `wallet_ledger_entry.id`.
+  id            BigInt           @id @default(autoincrement())
+  /// e.g. `'DEAL_STATUS_TRANSITION'`, `'WALLET_PAYMENT'`,
+  /// `'WITHDRAWAL_HOLD'`, `'WITHDRAWAL_PAYOUT'`,
+  /// `'ADMIN_PAYMENT_VERIFY'`, etc. Plain TEXT (not an enum) so new
+  /// action types can be added without a Postgres enum migration.
+  action_type   String
+  actor_user_id String?
+  actor_role    ParticipantRole?
+  deal_id       String?
+  withdrawal_id String?
+  /// Two-decimal fixed-point amount when the action moved money.
+  amount        Decimal?         @db.Decimal(18, 2)
+  currency      Currency?
+  prev_status   DealStatus?
+  new_status    DealStatus?
+  /// Free-form JSON payload for action-specific context (e.g. rejection
+  /// reason, payout reference, reviewer note).
+  metadata      Json?            @db.JsonB
+  /// Millisecond precision per R20.1–R20.3.
+  created_at    DateTime         @default(now()) @db.Timestamptz(3)
+
+  actor      User?              @relation(fields: [actor_user_id], references: [id])
+  deal       DealRoom?          @relation(fields: [deal_id], references: [id])
+  withdrawal WithdrawalRequest? @relation(fields: [withdrawal_id], references: [id])
+
+  @@index([deal_id, created_at(sort: Desc)])
+  @@index([actor_user_id, created_at(sort: Desc)])
+  @@index([action_type, created_at(sort: Desc)])
+  @@map("audit_log_entry")
+}
+
+/// Outbox row for asynchronous notification dispatch (R19.10, R19.11).
+/// Inserted inside the originating transaction by
+/// `NotificationOutboxService.enqueue(...)` (task 10.1) and drained by
+/// the 1-second `NotificationDispatcher` cron (task 10.2). At-least-once
+/// delivery: a row stays `pending` until it transitions to `sent` or hits
+/// the retry cap as `failed`.
+model NotificationOutboxEntry {
+  // BIGSERIAL PK per design DDL — monotonic insertion order.
+  id             BigInt            @id @default(autoincrement())
+  event          NotificationEvent
+  /// `'user' | 'admin_queue' | 'telegram_chat'`. Plain TEXT (not an
+  /// enum) so future recipient kinds can be added without a Postgres
+  /// enum migration. Nullable `recipient_id` lets the `'admin_queue'`
+  /// kind omit a specific recipient.
+  recipient_kind String
+  recipient_id   String?
+  /// Event-specific payload (deal id, status, amounts, links, ...).
+  payload        Json              @db.JsonB
+  status         OutboxStatus      @default(pending)
+  attempts       Int               @default(0)
+  last_error     String?
+  created_at     DateTime          @default(now()) @db.Timestamptz
+  sent_at        DateTime?         @db.Timestamptz
+
+  /// Drainer hot path: scan `pending` rows oldest-first.
+  @@index([status, created_at])
+  @@map("notification_outbox_entry")
+}
+
+/// Dedup row for retried mutating requests (R13.2, R16.2, R16.3, R18.11).
+///
+/// Used by two complementary patterns that share the same table:
+///
+/// 1. **Service-level dedup (design §"Idempotency").** A controller writes
+///    the row inside its originating `$transaction` together with the
+///    business mutation, storing the created entity's id in
+///    `result_ref`. On retry the service short-circuits to that ref
+///    instead of repeating the mutation. The composite PK
+///    `(scope, key, user_id)` collapses two concurrent inserts with the
+///    same key into one — the loser hits a unique-violation and the
+///    service re-reads the winner's `result_ref`.
+///
+/// 2. **HTTP middleware response cache (task 3.8).** `IdempotencyMiddleware`
+///    intercepts POST/PATCH/PUT requests carrying an `Idempotency-Key`
+///    header, fingerprints the request as
+///    `request_hash = sha256(method + url + body)`, inserts a pending row
+///    on first call, then captures the handler's response (`response_status`,
+///    `response_body`) for replay on subsequent calls with the same key.
+///    A hash mismatch (same key, different request body) responds 409
+///    with the canonical error envelope.
+///
+/// Both patterns honour the 24 h TTL recorded in `expires_at` — rows past
+/// their expiry are ignored on lookup and may be purged by a background
+/// job.
+///
+/// Design DDL declares `key TEXT PK` plus a UNIQUE on
+/// `(scope, key, user_id)`. We collapse those into a single composite
+/// primary key — functionally equivalent (composite PK gives the UNIQUE
+/// for free) and avoids a redundant secondary index. The composite PK
+/// satisfies the R18.11 uniqueness contract.
+model IdempotencyKey {
+  /// Caller-supplied `Idempotency-Key` header value or a server-derived
+  /// key (e.g. `${chatId}:${conversation_id}` for Telegram deal-create).
+  key             String
+  /// e.g. `'confirm_received' | 'approve_withdrawal' |
+  /// 'reject_withdrawal' | 'khqr_receipt' | 'tg_create'` for service-
+  /// level use, or `${METHOD}:${routePath}` (e.g. `'POST:/v1/deals'`)
+  /// when populated by the HTTP middleware. Plain TEXT (not an enum) so
+  /// new scopes can be added without an enum migration.
+  scope           String
+  user_id         String
+  /// Reference to the entity created on the first call (e.g. a
+  /// `Confirmation.id`, `WithdrawalRequest.id`, or `DealRoom.id`).
+  /// Re-served verbatim on cache hits by service-level callers. Null
+  /// for rows written by the HTTP middleware (which uses
+  /// `response_status` + `response_body` instead).
+  result_ref      String?
+  /// First-call request fingerprint computed by the HTTP middleware as
+  /// `sha256(method + url + body)`. A retry whose hash differs from this
+  /// value is rejected with 409 `request.idempotency_conflict`. Null for
+  /// rows written by service-level callers (they don't fingerprint the
+  /// request — the controller's input validation does that work).
+  request_hash    String?
+  /// Original route pattern (e.g. `/v1/deals/:publicId/confirm-received`)
+  /// captured by the middleware for diagnostics. Null for service-level
+  /// rows.
+  route           String?
+  /// HTTP status code of the cached response. Set by the middleware once
+  /// the handler completes. Null while the row is still pending OR for
+  /// service-level rows that don't cache full HTTP responses.
+  response_status Int?
+  /// Cached HTTP response body (the JSON-serialised value passed to
+  /// `res.json(...)`). Set alongside `response_status`. Null while the
+  /// row is pending OR for service-level rows.
+  response_body   Json?    @db.JsonB
+  /// TTL clock — rows past this instant are ignored on lookup and may be
+  /// purged by a background job. Default: `created_at + 24 h`.
+  expires_at      DateTime @db.Timestamptz
+  created_at      DateTime @default(now()) @db.Timestamptz
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([scope, key, user_id])
+  /// Useful for background cleanup ("delete idempotency keys older than
+  /// N days for this user") and per-user listings.
+  @@index([user_id, created_at])
+  /// Background-job hot path: scan rows whose TTL has elapsed.
+  @@index([expires_at])
+  @@map("idempotency_key")
+}
+
+/// Telegram bot FSM state, keyed by Telegram chat id. Survives container
+/// restarts and lets the bot run with multiple replicas (design
+/// §"Telegram bot design"). `/cancel` deletes the row (R18.13);
+/// `/newdeal` upserts it with the next state and accumulated payload.
+model BotConversation {
+  /// Telegram chat id (numeric string). PK so lookups are O(1) and
+  /// there is at most one conversation row per chat.
+  telegram_chat_id String   @id
+  /// e.g. `'ASK_ROLE' | 'ASK_TITLE' | 'ASK_AMOUNT' | 'ASK_DESC_*'`.
+  /// Plain TEXT (not an enum) so new states can be added without a
+  /// Postgres enum migration.
+  state            String
+  /// Fields collected so far during the `/newdeal` flow (role, title,
+  /// amount, description, ...).
+  partial_payload  Json     @db.JsonB
+  /// Per-step failure counter (distinct from idempotency-key retries).
+  retries          Int      @default(0)
+  updated_at       DateTime @updatedAt @db.Timestamptz
+
+  @@map("bot_conversation")
+}
